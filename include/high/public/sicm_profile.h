@@ -197,15 +197,6 @@ static inline region_profile_ptr get_new_region_profile() {
 
   rp->alloc_sites = NULL;
   rp->num_alloc_sites = 0;
-#if 0
-  rp->alloc_sites = orig_malloc(num_alloc_sites * sizeof(int));
-  if (rp->alloc_sites == NULL) {
-    printf("region_profile: out of memory\n");
-    exit(-ENOMEM);
-  }
-  rp->num_alloc_sites = num_alloc_sites;
-#endif
-
   return rp;
 }
 

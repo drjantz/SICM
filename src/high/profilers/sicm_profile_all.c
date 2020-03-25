@@ -20,8 +20,8 @@ void *profile_all(void *);
 void profile_all_interval(int);
 void profile_all_skip_interval(int);
 void profile_all_post_interval(arena_profile *);
-void update_page_rec(addr_t, int, int*);
-void update_cache_block_rec(addr_t, int, int*);
+void update_page_rec(addr_t, size_t, int, int*);
+void update_cache_block_rec(addr_t, size_t, int, int*);
 
 /* Uses libpfm to figure out the event we're going to use */
 void sh_get_event() {
@@ -268,11 +268,11 @@ void profile_all_interval(int s) {
               get_arena_profile_all_event_prof(arena->index, i)->total++;
 
               if (profopts.track_pages) {
-                update_page_rec(addr, arena->num_alloc_sites, arena->alloc_sites);
+                update_page_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
               }
 
               if (profopts.track_cache_blocks) {
-                update_cache_block_rec(addr, arena->num_alloc_sites, arena->alloc_sites);
+                update_cache_block_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
               }
             }
           }
@@ -335,7 +335,7 @@ void profile_all_post_interval_region_map( tree(addr_t, region_profile_ptr) map 
   }
 }
 
-void update_page_rec(addr_t addr, int arena_num_alloc_sites, int *arena_alloc_sites) {
+void update_page_rec(addr_t addr, size_t evt, int arena_num_alloc_sites, int *arena_alloc_sites) {
   unsigned i, j, diff_num;
   int *diff_sites;
   region_profile_ptr page_rec, new_rec;
@@ -397,182 +397,11 @@ void update_page_rec(addr_t addr, int arena_num_alloc_sites, int *arena_alloc_si
     orig_free(diff_sites);
   }
 
-  for (i = 0; i < prof.profile->num_profile_all_events; i++) {
-    page_rec->rprof.events[i].current++;
-    page_rec->rprof.events[i].total++;
-  }
+  page_rec->rprof.events[evt].current++;
+  page_rec->rprof.events[evt].total++;
 }
 
-#if 0
-  it = tree_lookup(prof.profile->page_map, page_addr);
-  if (!(tree_it_good(it))) {
-    fprintf(stderr, "good %p ... ", page_rec);
-    fflush(stderr);
-    page_rec = get_new_region_profile(arena->num_alloc_sites);
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      page_rec->alloc_sites[i] = arena->alloc_sites[i];
-    }
-    tree_insert(prof.profile->page_map, page_addr, page_rec);
-  } else {
-    page_rec = tree_it_val(it);
-
-    fprintf(stderr, "bad  %p ... ", page_rec);
-    fflush(stderr);
-    if (!(page_rec && page_rec->alloc_sites)) {
-      fprintf(stderr, "update_page_rec: memory error\n");
-      exit(-ENOMEM);
-    }
-
-    diff_sites = (int*) orig_malloc(arena->num_alloc_sites*sizeof(int));
-    if (diff_sites == NULL) {
-      fprintf(stderr, "update_page_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-
-    diff_num = 0;
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      for (j = 0; j < page_rec->num_alloc_sites; j++) {
-        if (arena->alloc_sites[i] == page_rec->alloc_sites[j]) {
-          break;
-        }
-      }
-      if (j == page_rec->num_alloc_sites) {
-        diff_sites[diff_num] = arena->alloc_sites[i];
-        diff_num++;
-      }
-    }
-
-    if (diff_num > 0) {
-      new_rec = get_new_region_profile((page_rec->num_alloc_sites)+diff_num);
-      memcpy(new_rec->rprof.events, page_rec->rprof.events,
-        (sizeof(per_event_profile_all_info) * prof.profile->num_profile_all_events));
-
-      for (i = 0; i < page_rec->num_alloc_sites; i++) {
-        new_rec->alloc_sites[i] = page_rec->alloc_sites[i];
-      }
-
-      for (i = page_rec->num_alloc_sites, j = 0; j < diff_num; i++, j++) {
-        new_rec->alloc_sites[i] = diff_sites[j];
-      }
-
-      tree_delete(prof.profile->page_map, page_addr);
-      orig_free(page_rec->rprof.events);
-      orig_free(page_rec->alloc_sites);
-      orig_free(page_rec);
-
-      page_rec = new_rec;
-      tree_insert(prof.profile->page_map, page_addr, page_rec);
-    }
-    //fprintf(stderr, "iec: %p ... ", page_rec);
-    //fflush(stderr);
-  }
-  fprintf(stderr, "%p ... ", page_rec);
-  fflush(stderr);
-
-  page_rec->rprof.events[i].current++;
-  page_rec->rprof.events[i].total++;
-  fprintf(stderr, "done\n");
-  fflush(stderr);
-}
-#endif
-
-#if 0
-  //fprintf(stderr, "rec: %p %p ... ", page_rec, arena);
-  //fflush(stderr);
-  if (page_rec->alloc_sites == NULL) {
-    page_rec->alloc_sites = (int*) orig_malloc(sizeof(int) * arena->num_alloc_sites);
-    if (page_rec->alloc_sites == NULL) {
-      fprintf(stderr, "update_page_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-    //fprintf(stderr, "woo: %12d %p ... ", arena->num_alloc_sites, page_rec->alloc_sites);
-    //fflush(stderr);
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      page_rec->alloc_sites[i] = arena->alloc_sites[i];
-      page_rec->num_alloc_sites = arena->num_alloc_sites;
-    }
-    //fprintf(stderr, "koo: %12d ... ", page_rec->num_alloc_sites);
-    //fflush(stderr);
-  } else {
-    /* store sites that are not already on the record into diff_sites */
-    diff_sites = (int*) orig_malloc(arena->num_alloc_sites*sizeof(int));
-    if (diff_sites == NULL) {
-      fprintf(stderr, "update_page_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-
-    fprintf(stderr, "boo: %-24lx %p ... ", addr, diff_sites);
-    fflush(stderr);
-
-    diff_num = 0;
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      for (j = 0; j < page_rec->num_alloc_sites; j++) {
-        if (arena->alloc_sites[i] == page_rec->alloc_sites[j]) {
-          break;
-        }
-      }
-      if (j == page_rec->num_alloc_sites) {
-        diff_sites[diff_num] = arena->alloc_sites[i];
-        diff_num++;
-      }
-    }
-
-    page_rec->alloc_sites = orig_realloc( page_rec->alloc_sites,
-      (((page_rec->num_alloc_sites) + diff_num) * sizeof(int)) );
-    if (page_rec->alloc_sites == NULL) {
-      fprintf(stderr, "update_page_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-
-    for (i = page_rec->num_alloc_sites, j = 0; j < diff_num; i++, j++) {
-      page_rec->alloc_sites[i] = diff_sites[j];
-    }
-
-    orig_free(diff_sites);
-    fprintf(stderr, " %d %p", page_rec->num_alloc_sites, page_rec->alloc_sites);
-    fflush(stderr);
-  }
-#endif
-
-#if 0
-#if 1
-  if (page_rec->arenas == NULL) {
-    page_rec->num_arenas = 1;
-    page_rec->arenas = (arena_info **) orig_malloc(sizeof(arena_info*));
-    page_rec->arenas[0] = arena;
-  } else {
-    for (i = 0; i < page_rec->num_arenas; i++) {
-      if (page_rec->arenas[i] == arena) {
-        break;
-      }
-    }
-    if (i == page_rec->num_arenas) {
-      /* MJ: for some undiagnosed reason, realloc causes a race/crash here */
-      arena_info **new_arenas = (arena_info **) orig_malloc(
-        ((page_rec->num_arenas+1) * sizeof(arena_info*)) );
-      if (new_arenas == NULL) {
-        fprintf(stderr, "update_page_rec: out of memory\n");
-        exit(-ENOMEM);
-      }
-
-      for (i = 0; i < page_rec->num_arenas; i++) {
-        new_arenas[i] = page_rec->arenas[i];
-      }
-#if 0
-      page_rec->arenas = orig_realloc( &((page_rec->arenas)[0]),
-        ((page_rec->num_arenas+1) * sizeof(arena_info*)) );
-#endif
-      orig_free(page_rec->arenas);
-      fprintf(stderr, "boo: %p %p %p\n", page_rec, page_rec->arenas, new_arenas);
-      page_rec->arenas = new_arenas;
-      page_rec->arenas[page_rec->num_arenas] = arena;
-      page_rec->num_arenas++;
-    }
-  }
-#endif
-#endif
-
-void update_cache_block_rec(addr_t addr, int arena_num_alloc_sites, int *arena_alloc_sites) {
+void update_cache_block_rec(addr_t addr, size_t evt, int arena_num_alloc_sites, int *arena_alloc_sites) {
   unsigned i, j, diff_num;
   int *diff_sites;
   region_profile_ptr cache_block_rec;
@@ -634,135 +463,7 @@ void update_cache_block_rec(addr_t addr, int arena_num_alloc_sites, int *arena_a
     orig_free(diff_sites);
   }
 
-  for (i = 0; i < prof.profile->num_profile_all_events; i++) {
-    cache_block_rec->rprof.events[i].current++;
-    cache_block_rec->rprof.events[i].total++;
-  }
-
-#if 0
-  it = tree_lookup(prof.profile->cache_block_map, cache_block_addr);
-  if (!(tree_it_good(it))) {
-    cache_block_rec = get_new_region_profile();
-    tree_insert(prof.profile->cache_block_map, cache_block_addr, cache_block_rec);
-  } else {
-    cache_block_rec = tree_it_val(it);
-  }
-
-  if (cache_block_rec->alloc_sites == NULL) {
-    cache_block_rec->alloc_sites = (int*) orig_malloc(sizeof(int) * arena->num_alloc_sites);
-    if (cache_block_rec->alloc_sites == NULL) {
-      fprintf(stderr, "update_cache_block_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      cache_block_rec->alloc_sites[i] = arena->alloc_sites[i];
-      cache_block_rec->num_alloc_sites = arena->num_alloc_sites;
-    }
-  } else {
-    /* store sites that are not already on the record into diff_sites */
-    diff_sites = (int*) orig_malloc(arena->num_alloc_sites*sizeof(int));
-    if (diff_sites == NULL) {
-      fprintf(stderr, "update_cache_block_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-
-    diff_num = 0;
-    for (i = 0; i < arena->num_alloc_sites; i++) {
-      for (j = 0; j < cache_block_rec->num_alloc_sites; j++) {
-        if (arena->alloc_sites[i] == cache_block_rec->alloc_sites[j]) {
-          break;
-        }
-      }
-      if (j == cache_block_rec->num_alloc_sites) {
-        diff_sites[diff_num] = arena->alloc_sites[i];
-        diff_num++;
-      }
-    }
-
-    cache_block_rec->alloc_sites = orig_realloc( cache_block_rec->alloc_sites,
-      (((cache_block_rec->num_alloc_sites) + diff_num) * sizeof(int)) );
-    if (cache_block_rec->alloc_sites == NULL) {
-      fprintf(stderr, "update_cache_block_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-
-    for (i = cache_block_rec->num_alloc_sites, j = 0; j < diff_num; i++, j++) {
-      cache_block_rec->alloc_sites[i] = diff_sites[j];
-    }
-
-    orig_free(diff_sites);
-  }
-
-  cache_block_rec->rprof.events[i].current++;
-  cache_block_rec->rprof.events[i].total++;
-#endif
+  cache_block_rec->rprof.events[evt].current++;
+  cache_block_rec->rprof.events[evt].total++;
 }
-
-#if 0
-    num_new_sites = (arena->num_alloc_sites - nr_same_sites);
-    if (nr_new_sites > 0) {
-    }
-
-      if (cache_block_rec->arenas[i] == arena) {
-        break;
-      }
-    }
-    if (i == cache_block_rec->num_arenas) {
-      /* MJ: for some undiagnosed reason, realloc causes a race/crash here */
-      fprintf(stderr, "wow: %d %p\n", cache_block_rec->num_arenas, &((cache_block_rec->arenas)[0]));
-
-      arena_info **new_arenas = (arena_info **) orig_malloc(
-        ((cache_block_rec->num_arenas+1) * sizeof(arena_info*)) );
-      if (new_arenas == NULL) {
-        fprintf(stderr, "update_cache_block_rec: out of memory\n");
-        exit(-ENOMEM);
-      }
-
-      for (i = 0; i < cache_block_rec->num_arenas; i++) {
-        new_arenas[i] = cache_block_rec->arenas[i];
-      }
-  }
-#endif
-
-
-#if 0
-  if (cache_block_rec->arenas == NULL) {
-    cache_block_rec->arenas = (arena_info **) orig_malloc(sizeof(arena_info*));
-    if (cache_block_rec->arenas == NULL) {
-      fprintf(stderr, "update_cache_block_rec: out of memory\n");
-      exit(-ENOMEM);
-    }
-    cache_block_rec->arenas[0] = arena;
-    cache_block_rec->num_arenas = 1;
-  } else {
-    for (i = 0; i < cache_block_rec->num_arenas; i++) {
-      if (cache_block_rec->arenas[i] == arena) {
-        break;
-      }
-    }
-    if (i == cache_block_rec->num_arenas) {
-      /* MJ: for some undiagnosed reason, realloc causes a race/crash here */
-      fprintf(stderr, "wow: %d %p\n", cache_block_rec->num_arenas, &((cache_block_rec->arenas)[0]));
-
-      arena_info **new_arenas = (arena_info **) orig_malloc(
-        ((cache_block_rec->num_arenas+1) * sizeof(arena_info*)) );
-      if (new_arenas == NULL) {
-        fprintf(stderr, "update_cache_block_rec: out of memory\n");
-        exit(-ENOMEM);
-      }
-
-      for (i = 0; i < cache_block_rec->num_arenas; i++) {
-        new_arenas[i] = cache_block_rec->arenas[i];
-      }
-#if 0
-      cache_block_rec->arenas = orig_realloc( &((cache_block_rec->arenas)[0]),
-        ((cache_block_rec->num_arenas+1) * sizeof(arena_info*)) );
-#endif
-      orig_free(cache_block_rec->arenas);
-      cache_block_rec->arenas = new_arenas;
-      cache_block_rec->arenas[cache_block_rec->num_arenas] = arena;
-      cache_block_rec->num_arenas++;
-    }
-  }
-#endif
 
