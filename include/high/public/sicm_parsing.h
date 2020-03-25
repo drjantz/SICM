@@ -156,49 +156,11 @@ static void sh_print_region_profile_line(FILE *file,
   fprintf(file, "\n");
 }
 
-#if 0
-  fprintf(file, "foo: %p ", it._node);
-  fflush(file);
-
-  rec = tree_it_val(it);
-  fprintf(file, " %p ", rec);
-  fflush(file);
-  if (rec == NULL) {
-    fprintf(file, "error: null rec\n");
-    exit(1);
-  }
-  for(i = 0; i < info->num_profile_all_events; i++) {
-    fprintf(file, "%-24lu", rec->rprof.events[i].total);
-  }
-
-  fprintf(file, " %d %p ", rec->num_arenas, rec->arenas);
-  fflush(file);
-
-  for(i = 0; i < rec->num_arenas; i++) {
-    fprintf(file, "kk: %d %p ", i, rec->arenas[i]);
-    fflush(file);
-    fprintf(file, "dd: %d %p ", rec->arenas[i]->num_alloc_sites, rec->arenas[i]->alloc_sites);
-    fflush(file);
-    if (rec->arenas[i]) {
-      for (j = 0; j < rec->arenas[i]->num_alloc_sites; j++) {
-        //fprintf(file, "%p ", rec->arenas[i]);
-        //fflush(file);
-        fprintf(file, "%-4lu ", rec->arenas[i]->alloc_sites[j]);
-        fflush(file);
-      }
-    }
-  }
-  fprintf(file, "\n");
-}
-#endif
-
 static void sh_print_page_profile(application_profile *info, FILE *file) {
   size_t cur_interval;
   tree(addr_t, region_profile_ptr) cur_page_map;
   tree_it(addr_t, region_profile_ptr) it;
   region_profile_ptr page_rec;
-
-  fprintf(stderr, "phola\n");
 
   if (!profopts.page_profile_intervals) {
     sh_print_region_profile_header(file, info, "page_addr");
@@ -227,8 +189,6 @@ static void sh_print_cache_block_profile(application_profile *info, FILE *file) 
   tree(addr_t, region_profile_ptr) cur_cache_block_map;
   tree_it(addr_t, region_profile_ptr) it;
   region_profile_ptr cache_block_rec;
-
-  fprintf(stderr, "chola\n");
 
   if (!profopts.cache_block_profile_intervals) {
     sh_print_region_profile_header(file, info, "cache_block_addr");
