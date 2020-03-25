@@ -6,6 +6,7 @@
 
 #define SICM_RUNTIME 1
 #include "sicm_runtime.h"
+#include "sicm_rdspy.h"
 
 /* Options for profiling */
 profiling_options profopts = {0};
@@ -126,6 +127,26 @@ void set_options() {
     profopts.profile_output_file = fopen(env, "w");
     if(!profopts.profile_output_file) {
       fprintf(stderr, "Failed to open profile output file. Aborting.\n");
+      exit(1);
+    }
+  }
+
+  env = getenv("SH_PAGE_PROFILE_OUTPUT_FILE");
+  profopts.page_profile_output_file = NULL;
+  if(env) {
+    profopts.page_profile_output_file = fopen(env, "w");
+    if(!profopts.page_profile_output_file) {
+      fprintf(stderr, "Failed to open page profile output file. Aborting.\n");
+      exit(1);
+    }
+  }
+
+  env = getenv("SH_CACHE_PROFILE_OUTPUT_FILE");
+  profopts.cache_profile_output_file = NULL;
+  if(env) {
+    profopts.cache_profile_output_file = fopen(env, "w");
+    if(!profopts.cache_profile_output_file) {
+      fprintf(stderr, "Failed to open cache profile output file. Aborting.\n");
       exit(1);
     }
   }
@@ -460,6 +481,45 @@ void set_options() {
       for(i = 0; i < profopts.num_profile_all_events; i++) {
         fprintf(tracker.log_file, "PROFILE_ALL_EVENTS: %s\n", profopts.profile_all_events[i]);
       }
+    }
+
+    env = getenv("SH_TRACK_PAGES");
+    profopts.track_pages = 0;
+    if(env) {
+      profopts.track_pages = 1;
+      if(tracker.log_file) {
+        fprintf(tracker.log_file, "SH_TRACK_PAGES: %zu\n", profopts.track_pages);
+      }
+    }
+
+    env = getenv("SH_PAGE_PROFILE_INTERVALS");
+    profopts.page_profile_intervals = 0;
+    if(env) {
+      profopts.page_profile_intervals = 1;
+    }
+
+    if(tracker.log_file) {
+      fprintf(tracker.log_file, "SH_PAGE_PROFILE_INTERVALS: %zu\n", profopts.page_profile_intervals);
+    }
+
+    env = getenv("SH_TRACK_CACHE_BLOCKS");
+    profopts.track_cache_blocks = 0;
+    if(env) {
+      profopts.track_cache_blocks = 1;
+    }
+
+    if(tracker.log_file) {
+      fprintf(tracker.log_file, "SH_TRACK_CACHE_BLOCKS: %zu\n", profopts.track_cache_blocks);
+    }
+
+    env = getenv("SH_CACHE_BLOCK_PROFILE_INTERVALS");
+    profopts.cache_block_profile_intervals = 0;
+    if(env) {
+      profopts.cache_block_profile_intervals = 1;
+    }
+
+    if(tracker.log_file) {
+      fprintf(tracker.log_file, "SH_CACHE_BLOCK_PROFILE_INTERVALS: %zu\n", profopts.cache_block_profile_intervals);
     }
   }
 

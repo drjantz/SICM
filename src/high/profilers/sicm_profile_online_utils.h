@@ -1,5 +1,6 @@
 #include <time.h>
 #include <sys/time.h>
+#include "sicm_profile.h"
 
 /* Rebinds an arena to the device list.
    Times it and prints debugging information if necessary. */

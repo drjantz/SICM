@@ -107,7 +107,7 @@ void end_interval() {
  */
 void profile_master_interval(int s) {
   struct timespec start, end, target, actual;
-  size_t i, n, x;
+  size_t i, n, x, idx;
   char copy;
 
   /* Convenience pointers */
@@ -218,16 +218,30 @@ void profile_master_interval(int s) {
   prof.profile->num_intervals++;
   prof.profile->intervals = orig_realloc(prof.profile->intervals,
                                          prof.profile->num_intervals * sizeof(interval_profile));
-  prof.profile->intervals[prof.profile->num_intervals - 1].arenas =
-    orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
-  prof.cur_interval = &(prof.profile->intervals[prof.profile->num_intervals - 1]);
+
+  idx = prof.profile->num_intervals - 1;
+  prof.profile->intervals[idx].arenas = orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
+  prof.cur_interval = &(prof.profile->intervals[idx]);
+
   arena_arr_for(i) {
     prof_check_good(arena, aprof, i);
-    prof.profile->intervals[prof.profile->num_intervals - 1].num_arenas = prof.profile->num_arenas;
-    prof.profile->intervals[prof.profile->num_intervals - 1].arenas[i] = orig_malloc(sizeof(arena_profile));
-    copy_arena_profile(
-           prof.profile->intervals[prof.profile->num_intervals - 1].arenas[i],
-           aprof);
+    prof.profile->intervals[idx].num_arenas = prof.profile->num_arenas;
+    prof.profile->intervals[idx].arenas[i] = orig_malloc(sizeof(arena_profile));
+    copy_arena_profile( prof.profile->intervals[idx].arenas[i], aprof );
+  }
+
+  if (profopts.page_profile_intervals) {
+    profile_all_post_interval_region_map ( prof.profile->page_map );
+    prof.profile->intervals[idx].page_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(prof.profile->intervals[idx].page_map, prof.profile->page_map);
+    reset_region_map(prof.profile->page_map);
+  }
+
+  if (profopts.cache_block_profile_intervals) {
+    prof.profile->intervals[idx].cache_block_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(prof.profile->intervals[idx].cache_block_map, prof.profile->cache_block_map);
+    profile_all_post_interval_region_map ( prof.profile->cache_block_map ); 
+    reset_region_map(prof.profile->cache_block_map);
   }
 
   pthread_rwlock_unlock(&prof.profile_lock);
@@ -417,6 +431,13 @@ void initialize_profiling() {
   prof.profile->num_arenas = 0;
   prof.profile->arenas = orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
 
+  if (profopts.track_pages) {
+    prof.profile->page_map = tree_make(addr_t, region_profile_ptr);
+  }
+  if (profopts.track_cache_blocks) {
+    prof.profile->cache_block_map = tree_make(addr_t, region_profile_ptr);
+  }
+
   /* Store the profile_all event strings */
   prof.profile->num_profile_all_events = profopts.num_profile_all_events;
   prof.profile->profile_all_events = orig_calloc(prof.profile->num_profile_all_events, sizeof(char *));
@@ -506,6 +527,12 @@ void sh_stop_profile_master_thread() {
 
   if(profopts.profile_output_file) {
     sh_print_profiling(prof.profile, profopts.profile_output_file);
+  }
+  if(profopts.page_profile_output_file) {
+    sh_print_page_profile(prof.profile, profopts.page_profile_output_file);
+  }
+  if(profopts.cache_profile_output_file) {
+    sh_print_cache_block_profile(prof.profile, profopts.cache_profile_output_file);
   }
   deinitialize_profiling();
 }

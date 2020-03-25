@@ -159,6 +159,9 @@ typedef struct profiling_options {
   int should_run_rdspy;
   int profile_intervals;
 
+  int track_pages, track_cache_blocks;
+  int page_profile_intervals, cache_block_profile_intervals;
+
   /* Sample rates */
   size_t profile_rate_nseconds;
   unsigned long profile_rss_skip_intervals,
@@ -173,6 +176,9 @@ typedef struct profiling_options {
   FILE *profile_input_file;
   FILE *profile_output_file;
   FILE *profile_online_debug_file; /* For the verbose online approach */
+
+  FILE *page_profile_output_file;
+  FILE *cache_profile_output_file;
 
   /* Online */
   size_t num_profile_online_events;

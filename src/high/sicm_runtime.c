@@ -15,12 +15,15 @@
 #define SICM_RUNTIME 1
 #include "sicm_runtime.h"
 #include "sicm_rdspy.h"
+#include "sicm_profile.h"
 
 char sh_initialized = 0;
 void *(*orig_malloc_ptr)(size_t);
 void *(*orig_calloc_ptr)(size_t, size_t);
 void *(*orig_realloc_ptr)(void *, size_t);
 void (*orig_free_ptr)(void *);
+
+void sh_create_arena(int, int, sicm_device *);
 
 /*************************************************
  *               ORIG_MALLOC                     *

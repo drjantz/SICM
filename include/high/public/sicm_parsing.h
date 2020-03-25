@@ -111,6 +111,147 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
   }
 }
 
+static void sh_print_region_profile_header(FILE *file,
+  application_profile *info, const char *keystr)
+{
+  unsigned i;
+
+  fprintf(file, "%-18s", keystr);
+  for(i = 0; i < info->num_profile_all_events; i++) {
+    if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_LLC_MISS_RETIRED:LOCAL_DRAM") == 0) {
+      fprintf(file, "%-24s", "local_dram_reads");
+    } else if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_RETIRED:LOCAL_PMM") == 0) {
+      fprintf(file, "%-24s", "local_pmm_reads");
+    } else {
+      fprintf(file, "%-24s", info->profile_all_events[i]);
+    }
+  }
+  fprintf(file, "sites");
+  fprintf(file, "\n");
+}
+
+static void sh_print_region_profile_line(FILE *file,
+  application_profile *info, tree_it(addr_t, region_profile_ptr) it,
+  unsigned key_shift)
+{
+  unsigned i, j;
+  region_profile_ptr rec;
+
+  fprintf(file, "%-18lx", (((intptr_t)tree_it_key(it)) << key_shift));
+
+  rec = tree_it_val(it);
+  if (rec == NULL) {
+    fprintf(file, "error: null rec\n");
+    exit(1);
+  }
+
+  for (i = 0; i < info->num_profile_all_events; i++) {
+    fprintf(file, "%-24lu", rec->rprof.events[i].total);
+  }
+
+  for(i = 0; i < rec->num_alloc_sites; i++) {
+    fprintf(file, "%-4lu ", rec->alloc_sites[i]);
+  }
+
+  fprintf(file, "\n");
+}
+
+#if 0
+  fprintf(file, "foo: %p ", it._node);
+  fflush(file);
+
+  rec = tree_it_val(it);
+  fprintf(file, " %p ", rec);
+  fflush(file);
+  if (rec == NULL) {
+    fprintf(file, "error: null rec\n");
+    exit(1);
+  }
+  for(i = 0; i < info->num_profile_all_events; i++) {
+    fprintf(file, "%-24lu", rec->rprof.events[i].total);
+  }
+
+  fprintf(file, " %d %p ", rec->num_arenas, rec->arenas);
+  fflush(file);
+
+  for(i = 0; i < rec->num_arenas; i++) {
+    fprintf(file, "kk: %d %p ", i, rec->arenas[i]);
+    fflush(file);
+    fprintf(file, "dd: %d %p ", rec->arenas[i]->num_alloc_sites, rec->arenas[i]->alloc_sites);
+    fflush(file);
+    if (rec->arenas[i]) {
+      for (j = 0; j < rec->arenas[i]->num_alloc_sites; j++) {
+        //fprintf(file, "%p ", rec->arenas[i]);
+        //fflush(file);
+        fprintf(file, "%-4lu ", rec->arenas[i]->alloc_sites[j]);
+        fflush(file);
+      }
+    }
+  }
+  fprintf(file, "\n");
+}
+#endif
+
+static void sh_print_page_profile(application_profile *info, FILE *file) {
+  size_t cur_interval;
+  tree(addr_t, region_profile_ptr) cur_page_map;
+  tree_it(addr_t, region_profile_ptr) it;
+  region_profile_ptr page_rec;
+
+  fprintf(stderr, "phola\n");
+
+  if (!profopts.page_profile_intervals) {
+    sh_print_region_profile_header(file, info, "page_addr");
+    tree_traverse(info->page_map, it) {
+      sh_print_region_profile_line(file, info, it, PAGE_SHIFT);
+    }
+    fprintf(file, "\n");
+
+  } else {
+    for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
+      cur_page_map = info->intervals[cur_interval].page_map;
+      if(!cur_page_map) continue;
+
+      fprintf(file, "Interval: %d\n", cur_interval);
+      sh_print_region_profile_header(file, info, "page_addr");
+      tree_traverse(cur_page_map, it) {
+        sh_print_region_profile_line(file, info, it, PAGE_SHIFT);
+      }
+      fprintf(file, "\n");
+    }
+  }
+}
+
+static void sh_print_cache_block_profile(application_profile *info, FILE *file) {
+  size_t i, cur_interval;
+  tree(addr_t, region_profile_ptr) cur_cache_block_map;
+  tree_it(addr_t, region_profile_ptr) it;
+  region_profile_ptr cache_block_rec;
+
+  fprintf(stderr, "chola\n");
+
+  if (!profopts.cache_block_profile_intervals) {
+    sh_print_region_profile_header(file, info, "cache_block_addr");
+    tree_traverse(info->cache_block_map, it) {
+      sh_print_region_profile_line(file, info, it, CACHE_BLOCK_SHIFT);
+    }
+    fprintf(file, "\n");
+
+  } else {
+    for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
+      cur_cache_block_map = info->intervals[cur_interval].cache_block_map;
+      if(!cur_cache_block_map) continue;
+
+      fprintf(file, "Interval: %d\n", cur_interval);
+      sh_print_region_profile_header(file, info, "cache_block_addr");
+      tree_traverse(cur_cache_block_map, it) {
+        sh_print_region_profile_line(file, info, it, CACHE_BLOCK_SHIFT);
+      }
+      fprintf(file, "\n");
+    }
+  }
+}
+
 /* Reads the above-printed information back into an application_profile struct. */
 static application_profile *sh_parse_profiling(FILE *file) {
   /* Stores profiling information, returned */

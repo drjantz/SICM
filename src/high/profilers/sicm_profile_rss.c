@@ -1,3 +1,6 @@
+#ifndef _LARGEFILE64_SOURCE
+#define _LARGEFILE64_SOURCE
+#endif
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -5,6 +8,7 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <sys/types.h>
+
 
 #define SICM_RUNTIME 1
 #include "sicm_runtime.h"

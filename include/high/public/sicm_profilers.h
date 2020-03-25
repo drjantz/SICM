@@ -1,5 +1,7 @@
 #pragma once
+#ifndef __USE_LARGEFILE64
 #define __USE_LARGEFILE64
+#endif
 #include <stdint.h> /* For uint64_t, etc. */
 #include <stdlib.h> /* For size_t */
 #include "sicm_tree.h"
