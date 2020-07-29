@@ -40,6 +40,17 @@ typedef struct alloc_info {
 typedef alloc_info *alloc_info_ptr;
 use_tree(addr_t, alloc_info_ptr);
 
+/* Information about a single object allocation */
+typedef struct object_info {
+  int site_id;
+  size_t size;
+} object_info;
+typedef object_info *object_info_ptr;
+use_tree(addr_t, object_info_ptr);
+
+typedef uint64_t * uint64_t_ptr;
+use_tree(int, uint64_t_ptr);
+
 /* Information about a single arena */
 typedef struct arena_info {
   int *alloc_sites, num_alloc_sites; /* Stores the allocation sites that are in this arena */
@@ -108,6 +119,11 @@ typedef struct tracker_struct {
   tree(addr_t, alloc_info_ptr) profile_allocs_map;
   pthread_rwlock_t profile_allocs_map_lock;
 
+  /* Only for profile_objects.
+   */
+  tree(addr_t, object_info_ptr) profile_objects_map;
+  pthread_rwlock_t profile_objects_map_lock;
+  tree(int, uint64_t_ptr) profile_sites_map;
 
   /* Associates a thread with an index (starting at 0) into the `arenas` array */
   pthread_mutex_t thread_lock;
@@ -151,13 +167,16 @@ typedef struct profiling_options {
       should_profile_all,
       should_profile_one,
       should_profile_rss,
+      should_profile_dirty,
       should_profile_extent_size,
       should_profile_allocs,
+      should_profile_objects,
       should_profile,
       should_profile_separate_threads;
   int profile_one_site;
   int should_run_rdspy;
   int profile_intervals;
+  int print_per_interval_profile;
 
   int track_pages, track_cache_blocks;
   int page_profile_intervals, cache_block_profile_intervals;
@@ -165,6 +184,7 @@ typedef struct profiling_options {
   /* Sample rates */
   size_t profile_rate_nseconds;
   unsigned long profile_rss_skip_intervals,
+                profile_dirty_skip_intervals,
                 profile_all_skip_intervals,
                 profile_extent_size_skip_intervals,
                 profile_allocs_skip_intervals,
@@ -179,6 +199,8 @@ typedef struct profiling_options {
 
   FILE *page_profile_output_file;
   FILE *cache_profile_output_file;
+  FILE *dirty_profile_output_file;
+  FILE *site_profile_output_file;
 
   /* Online */
   size_t num_profile_online_events;

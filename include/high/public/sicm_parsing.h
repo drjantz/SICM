@@ -10,14 +10,203 @@
 #include "sicm_tree.h"
 #include "sicm_profile.h"
 
+#ifdef SICM_RUNTIME
+void get_pfn(int pagemap_fd, addr_t vaddr, region_profile_ptr page_rec);
+void get_page_map_pfns(tree(addr_t, region_profile_ptr) page_map);
+
+static void sh_print_site_profile(FILE *file,
+  tree(int, uint64_t_ptr) site_profile, application_profile *info) {
+
+  tree_it(int, uint64_t_ptr) it;
+  uint64_t_ptr site_rec;
+  size_t i;
+  
+  fprintf(file, "%-6s", "site");
+  for(i = 0; i < info->num_profile_all_events; i++) {
+    if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_LLC_MISS_RETIRED:LOCAL_DRAM") == 0) {
+      fprintf(file, "%-34s", "local_dram_reads");
+    } else if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_RETIRED:LOCAL_PMM") == 0) {
+      fprintf(file, "%-34s", "local_pmm_reads");
+    } else {
+      fprintf(file, "%-34s", info->profile_all_events[i]);
+    }
+  }
+  fprintf(file, "%-34s\n", "RSS");
+
+  tree_traverse(site_profile, it) {
+    fprintf(file, "%-6d", tree_it_key(it));
+
+    site_rec = tree_it_val(it);
+    if (site_rec == NULL) {
+      fprintf(file, "error: null rec\n");
+      exit(1);
+    }
+
+    for(i = 0; i < info->num_profile_all_events; i++) {
+      fprintf(file, "%-34"PRIu64"", site_rec[i]);
+    }
+    fprintf(file, "%-34"PRIu64"\n", site_rec[i]);
+  }
+}
+#endif
+
 /* Iterates over the application_profile
    structure and prints it out so that it can
  * be seamlessly read back in */
 static void sh_print_profiling(application_profile *info, FILE *file) {
   size_t i, n, x, cur_interval;
   arena_profile *aprof;
-  arena_info *arena;
 
+#ifdef SICM_RUNTIME
+  tree(int, uint64_t_ptr) site_profile;
+  int cur_site, agg_site_profile;
+  uint64_t_ptr site_rec;
+  //profile_all_info val_prof;
+
+  agg_site_profile = 0;
+  if (profopts.site_profile_output_file) {
+    if (tracker.profile_sites_map == NULL) {
+      tracker.profile_sites_map = tree_make(int, uint64_t_ptr);
+      agg_site_profile = 1;
+    }
+  }
+
+#if 0
+  val_prof.events = (per_event_profile_all_info*) orig_malloc(
+                      (info->num_profile_all_events+1) *
+                      sizeof(per_event_profile_all_info)
+                    );
+
+  fprintf(file, "%-6s", "val");
+  for(i = 0; i < info->num_profile_all_events; i++) {
+    if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_LLC_MISS_RETIRED:LOCAL_DRAM") == 0) {
+      fprintf(file, "%-34s", "local_dram_reads");
+    } else if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_RETIRED:LOCAL_PMM") == 0) {
+      fprintf(file, "%-34s", "local_pmm_reads");
+    } else {
+      fprintf(file, "%-34s", info->profile_all_events[i]);
+    }
+  }
+  fprintf(file, "%-34s\n", "RSS");
+#endif
+
+
+  for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
+#if 0
+    for(n = 0; n < ((info->num_profile_all_events)+1); n++) {
+      val_prof.events[n].current = 0;
+    }
+#endif
+    if (profopts.print_per_interval_profile) {
+      fprintf(file, "===== BEGIN INTERVAL %zu PROFILING =====\n", cur_interval);
+      fprintf(file, "Number of PROFILE_ALL events: %zu\n", info->num_profile_all_events);
+      fprintf(file, "Number of arenas: %zu\n", info->intervals[cur_interval].num_arenas);
+      fprintf(file, "Upper Capacity: %zu\n", info->upper_capacity);
+      fprintf(file, "Lower Capacity: %zu\n", info->lower_capacity);
+    }
+    for(i = 0; i < info->intervals[cur_interval].num_arenas; i++) {
+      aprof = info->intervals[cur_interval].arenas[i];
+      if(!aprof) continue;
+
+      /* Arena information and sites that are in this one arena */
+      if (profopts.print_per_interval_profile) {
+        fprintf(file, "BEGIN ARENA %u\n", aprof->index);
+        fprintf(file, "  Number of allocation sites: %d\n", aprof->num_alloc_sites);
+        fprintf(file, "  Allocation sites: ");
+        for(n = 0; n < aprof->num_alloc_sites; n++) {
+          fprintf(file, "%d ", aprof->alloc_sites[n]);
+        }
+        fprintf(file, "\n");
+      }
+      cur_site = (aprof->num_alloc_sites == 1) ? aprof->alloc_sites[0] : 0;
+
+      if(profopts.should_profile_all) {
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  BEGIN PROFILE_ALL\n");
+        }
+
+        for(n = 0; n < info->num_profile_all_events; n++) {
+          if (profopts.print_per_interval_profile) {
+            fprintf(file, "    BEGIN EVENT %s\n", info->profile_all_events[n]);
+            fprintf(file, "      Total: %zu\n", aprof->profile_all.events[n].total);
+            fprintf(file, "      Current: %zu\n", aprof->profile_all.events[n].current);
+            fprintf(file, "      Peak: %zu\n", aprof->profile_all.events[n].peak);
+            fprintf(file, "    END EVENT %s\n", info->profile_all_events[n]);
+          }
+
+          if (agg_site_profile) {
+            site_rec = get_site_rec(tracker.profile_sites_map, cur_site);
+            site_rec[n] += aprof->profile_all.events[n].current;
+            //val_prof.events[n].current += aprof->profile_all.events[n].current;
+          }
+        }
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  END PROFILE_ALL\n");
+        }
+      }
+      if(profopts.should_profile_allocs) {
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  BEGIN PROFILE_ALLOCS\n");
+          fprintf(file, "    Peak: %zu\n", aprof->profile_allocs.peak);
+          fprintf(file, "    Current: %zu\n", aprof->profile_allocs.current);
+          fprintf(file, "  END PROFILE_ALLOCS\n");
+        }
+      }
+      if(profopts.should_profile_rss) {
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  BEGIN PROFILE_RSS\n");
+          fprintf(file, "    Peak: %zu\n", aprof->profile_rss.peak);
+          fprintf(file, "    Current: %zu\n", aprof->profile_rss.current);
+          fprintf(file, "  END PROFILE_RSS\n");
+        }
+
+        if (agg_site_profile) {
+          site_rec = get_site_rec(tracker.profile_sites_map, cur_site);
+          if (aprof->profile_rss.peak > site_rec[info->num_profile_all_events]) {
+            site_rec[info->num_profile_all_events] = aprof->profile_rss.peak;
+          }
+#if 0
+          val_prof.events[info->num_profile_all_events].current +=
+            site_rec[info->num_profile_all_events];
+#endif
+        }
+      }
+      if(profopts.should_profile_extent_size) {
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  BEGIN PROFILE_EXTENT_SIZE\n");
+          fprintf(file, "    Peak: %zu\n", aprof->profile_extent_size.peak);
+          fprintf(file, "    Current: %zu\n", aprof->profile_extent_size.current);
+          fprintf(file, "  END PROFILE_EXTENT_SIZE\n");
+        }
+      }
+      if(profopts.should_profile_online) {
+        if (profopts.print_per_interval_profile) {
+          fprintf(file, "  BEGIN PROFILE_ONLINE\n");
+          fprintf(file, "    Device: %d\n", aprof->profile_online.dev);
+          fprintf(file, "    Hot: %d\n", aprof->profile_online.hot);
+          fprintf(file, "    Hot Intervals: %zu\n",
+                  aprof->profile_online.num_hot_intervals);
+          fprintf(file, "  END PROFILE_ONLINE\n");
+        }
+      }
+      if (profopts.print_per_interval_profile) {
+        fprintf(file, "END ARENA %u\n", aprof->index);
+      }
+    }
+
+#if 0
+    fprintf(file, "%-6d", cur_interval);
+    for(n = 0; n < ((info->num_profile_all_events)+1); n++) {
+      fprintf(file, "%-34zu", val_prof.events[n].current);
+    }
+    fprintf(file, "\n");
+#endif
+    
+    if (profopts.print_per_interval_profile) {
+      fprintf(file, "===== END INTERVAL PROFILING =====\n");
+    }
+  }
+#else
   for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
     fprintf(file, "===== BEGIN INTERVAL %zu PROFILING =====\n", cur_interval);
     fprintf(file, "Number of PROFILE_ALL events: %zu\n", info->num_profile_all_events);
@@ -37,45 +226,6 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
       }
       fprintf(file, "\n");
 
-#ifdef SICM_RUNTIME
-      if(profopts.should_profile_all) {
-        fprintf(file, "  BEGIN PROFILE_ALL\n");
-        for(n = 0; n < info->num_profile_all_events; n++) {
-          fprintf(file, "    BEGIN EVENT %s\n", info->profile_all_events[n]);
-          fprintf(file, "      Total: %zu\n", aprof->profile_all.events[n].total);
-          fprintf(file, "      Current: %zu\n", aprof->profile_all.events[n].current);
-          fprintf(file, "      Peak: %zu\n", aprof->profile_all.events[n].peak);
-          fprintf(file, "    END EVENT %s\n", info->profile_all_events[n]);
-        }
-        fprintf(file, "  END PROFILE_ALL\n");
-      }
-      if(profopts.should_profile_allocs) {
-        fprintf(file, "  BEGIN PROFILE_ALLOCS\n");
-        fprintf(file, "    Peak: %zu\n", aprof->profile_allocs.peak);
-        fprintf(file, "    Current: %zu\n", aprof->profile_allocs.current);
-        fprintf(file, "  END PROFILE_ALLOCS\n");
-      }
-      if(profopts.should_profile_rss) {
-        fprintf(file, "  BEGIN PROFILE_RSS\n");
-        fprintf(file, "    Peak: %zu\n", aprof->profile_rss.peak);
-        fprintf(file, "    Current: %zu\n", aprof->profile_rss.current);
-        fprintf(file, "  END PROFILE_RSS\n");
-      }
-      if(profopts.should_profile_extent_size) {
-        fprintf(file, "  BEGIN PROFILE_EXTENT_SIZE\n");
-        fprintf(file, "    Peak: %zu\n", aprof->profile_extent_size.peak);
-        fprintf(file, "    Current: %zu\n", aprof->profile_extent_size.current);
-        fprintf(file, "  END PROFILE_EXTENT_SIZE\n");
-      }
-      if(profopts.should_profile_online) {
-        fprintf(file, "  BEGIN PROFILE_ONLINE\n");
-        fprintf(file, "    Device: %d\n", aprof->profile_online.dev);
-        fprintf(file, "    Hot: %d\n", aprof->profile_online.hot);
-        fprintf(file, "    Hot Intervals: %zu\n",
-                aprof->profile_online.num_hot_intervals);
-        fprintf(file, "  END PROFILE_ONLINE\n");
-      }
-#else
       fprintf(file, "  BEGIN PROFILE_ALL\n");
       for(n = 0; n < info->num_profile_all_events; n++) {
         fprintf(file, "    BEGIN EVENT %s\n", info->profile_all_events[n]);
@@ -103,12 +253,19 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
       fprintf(file, "    Hot Intervals: %zu\n",
               aprof->profile_online.num_hot_intervals);
       fprintf(file, "  END PROFILE_ONLINE\n");
-#endif
-
       fprintf(file, "END ARENA %u\n", aprof->index);
     }
     fprintf(file, "===== END INTERVAL PROFILING =====\n");
   }
+#endif
+
+#ifdef SICM_RUNTIME
+  if (profopts.site_profile_output_file) {
+    sh_print_site_profile(profopts.site_profile_output_file,
+      tracker.profile_sites_map, info);
+    fclose(profopts.site_profile_output_file);
+  }
+#endif
 }
 
 static void sh_print_region_profile_header(FILE *file,
@@ -117,13 +274,14 @@ static void sh_print_region_profile_header(FILE *file,
   unsigned i;
 
   fprintf(file, "%-18s", keystr);
+  fprintf(file, "%-18s", "pfn");
   for(i = 0; i < info->num_profile_all_events; i++) {
     if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_LLC_MISS_RETIRED:LOCAL_DRAM") == 0) {
-      fprintf(file, "%-24s", "local_dram_reads");
+      fprintf(file, "%-34s", "local_dram_reads");
     } else if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_RETIRED:LOCAL_PMM") == 0) {
-      fprintf(file, "%-24s", "local_pmm_reads");
+      fprintf(file, "%-34s", "local_pmm_reads");
     } else {
-      fprintf(file, "%-24s", info->profile_all_events[i]);
+      fprintf(file, "%-34s", info->profile_all_events[i]);
     }
   }
   fprintf(file, "sites");
@@ -144,9 +302,10 @@ static void sh_print_region_profile_line(FILE *file,
     fprintf(file, "error: null rec\n");
     exit(1);
   }
+  fprintf(file, "%-18lx", (rec->pfn));
 
   for (i = 0; i < info->num_profile_all_events; i++) {
-    fprintf(file, "%-24lu", rec->rprof.events[i].total);
+    fprintf(file, "%-34lu", rec->rprof.events[i].total);
   }
 
   for(i = 0; i < rec->num_alloc_sites; i++) {
@@ -156,12 +315,14 @@ static void sh_print_region_profile_line(FILE *file,
   fprintf(file, "\n");
 }
 
+#ifdef SICM_RUNTIME
 static void sh_print_page_profile(application_profile *info, FILE *file) {
   size_t cur_interval;
   tree(addr_t, region_profile_ptr) cur_page_map;
   tree_it(addr_t, region_profile_ptr) it;
   region_profile_ptr page_rec;
 
+  //get_page_map_pfns(info->page_map);
   if (!profopts.page_profile_intervals) {
     sh_print_region_profile_header(file, info, "page_addr");
     tree_traverse(info->page_map, it) {
@@ -211,6 +372,7 @@ static void sh_print_cache_block_profile(application_profile *info, FILE *file) 
     }
   }
 }
+#endif
 
 /* Reads the above-printed information back into an application_profile struct. */
 static application_profile *sh_parse_profiling(FILE *file) {

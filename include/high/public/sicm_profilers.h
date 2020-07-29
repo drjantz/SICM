@@ -4,6 +4,7 @@
 #endif
 #include <stdint.h> /* For uint64_t, etc. */
 #include <stdlib.h> /* For size_t */
+#include <sys/time.h>
 #include "sicm_tree.h"
 
 /* Going to be defined by sicm_profile.h */
@@ -25,11 +26,13 @@ struct __attribute__ ((__packed__)) sample {
 union pfn_t {
   uint64_t raw;
   struct {
-    uint64_t pfn:     55;
-    uint32_t pshift:  6;
-    uint32_t res:     1;
-    uint32_t swapped: 1;
-    uint32_t present: 1;
+    uint64_t pfn:       55;
+    uint32_t soft_dirty: 1;
+    uint32_t exclusive:  1;
+    uint32_t phsift:     4;
+    uint32_t res:        1;
+    uint32_t swapped:    1;
+    uint32_t present:    1;
   } obj;
 };
 
@@ -52,6 +55,7 @@ typedef struct profile_all_data {
   uint64_t **prev_head;
   size_t pagesize;
   unsigned long tid;
+  int pagemap_fd;
 } profile_all_data;
 
 /********************
@@ -68,6 +72,7 @@ typedef struct profile_rss_data {
   int pagemap_fd;
   union pfn_t *pfndata;
   size_t pagesize, addrsize;
+  unsigned bailout;
 } profile_rss_data;
 
 /********************
@@ -96,6 +101,11 @@ typedef struct profile_allocs_data {
   /* profile_allocs */
 } profile_allocs_data;
 
+typedef struct dirty_profile {
+  unsigned live, last_dirty_val;
+} dirty_profile;
+typedef dirty_profile * dirty_profile_ptr;
+
 /********************
  * PROFILE_ONLINE
  ********************/
@@ -111,6 +121,9 @@ use_tree(site_info_ptr, int);
 use_tree(int, site_info_ptr);
 use_tree(int, sicm_dev_ptr);
 use_tree(int, size_t);
+
+use_tree(addr_t, dirty_profile_ptr);
+use_tree(dirty_profile_ptr, addr_t);
 #endif
 
 typedef struct profile_online_info {
@@ -145,6 +158,20 @@ typedef struct profile_online_data {
   profile_online_data_orig *orig;
   profile_online_data_ski *ski;
 } profile_online_data;
+
+
+/********************
+ * PROFILE_DIRTY
+ ********************/
+typedef struct profile_dirty_data {
+  int pagemap_fd;
+  union pfn_t *pfndata;
+  struct timespec start_time, prev_time;
+
+  size_t pagesize, addrsize;
+  unsigned cur_val, bailout;
+  tree(addr_t, dirty_profile_ptr) dirty_page_map;
+} profile_dirty_data;
 
 /********************
  * Functions
@@ -198,3 +225,11 @@ void profile_online_interval(int);
 void profile_online_post_interval(arena_profile *);
 void profile_online_skip_interval(int);
 void profile_online_arena_init(profile_online_info *);
+
+void *profile_dirty(void *);
+void profile_dirty_interval(int);
+void profile_dirty_skip_interval(int);
+void profile_dirty_post_interval();
+void profile_dirty_init();
+void profile_dirty_deinit();
+

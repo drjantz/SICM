@@ -12,6 +12,7 @@
 #include "sicm_runtime.h"
 #include "sicm_profilers.h"
 #include "sicm_profile.h"
+#include "sicm_parsing.h"
 
 void profile_all_arena_init(profile_all_info *);
 void profile_all_deinit();
@@ -86,6 +87,7 @@ void profile_all_deinit() {
       close(prof.profile_all.fds[n][i]);
     }
   }
+  close(prof.profile_all.pagemap_fd);
 }
 
 void profile_all_init() {
@@ -96,6 +98,11 @@ void profile_all_init() {
 
   prof.profile_all.tid = (unsigned long) syscall(SYS_gettid);
   prof.profile_all.pagesize = (size_t) sysconf(_SC_PAGESIZE);
+  prof.profile_all.pagemap_fd = open("/proc/self/pagemap", O_RDONLY);
+  if (prof.profile_all.pagemap_fd < 0) {
+    fprintf(stderr, "Failed to open /proc/self/pagemap. Aborting.\n");
+    exit(1);
+  }
 
   /* This array is for storing the per-cpu, per-event data_head values. Instead of calling `poll`, we
      can see if the current data_head value is different from the previous one, and when it is,
@@ -193,11 +200,17 @@ void profile_all_interval(int s) {
   char *base, *begin, *end, break_next_site;
   struct sample *sample;
   struct perf_event_header *header;
-  int err;
+  int err, site_id;
   size_t i, n, x;
   arena_profile *aprof;
   per_event_profile_all_info *per_event_aprof;
   struct pollfd pfd;
+  object_info_ptr oip;
+  uint64_t_ptr site_profile;
+  tree_it(addr_t, object_info_ptr) oit;
+  tree_it(int, uint64_t_ptr) sit;
+  addr_t obj_base;
+  size_t obj_size;
 
   /* Loop over all arenas and clear their accumulators */
   for(i = 0; i < prof.profile->num_profile_all_events; i++) {
@@ -232,6 +245,84 @@ void profile_all_interval(int s) {
       /* Grab the head. If the head is the same as the previous one, we can just
          move on to the next event; the buffer isn't ready to read yet. */
       head = prof.profile_all.metadata[x][i]->data_head;
+#if 0
+      if (i==0) {
+        if(head == prof.profile_all.prev_head[x][i]) {
+          fprintf(profopts.profile_output_file, "x: %4d head: %12zu prev: %12zu start: %p off: %p end: %p size: %llu\n",
+                  x, head, prof.profile_all.prev_head[x][i],
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                    ((intptr_t)prof.profile_all.pagesize) ),
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                      prof.profile_all.metadata[x][i]->data_offset),
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                    ( ((intptr_t)prof.profile_all.pagesize) +
+                      ((intptr_t)(prof.profile_all.pagesize * profopts.max_sample_pages))
+                    )
+                  ), prof.profile_all.metadata[x][i]->data_size
+                 );
+        } else {
+          fprintf(profopts.profile_output_file, "y: %4d head: %12zu prev: %12zu start: %p off: %p end: %p %llu\n",
+                  x, head, prof.profile_all.prev_head[x][i],
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                    ((intptr_t)prof.profile_all.pagesize) ),
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                      prof.profile_all.metadata[x][i]->data_offset),
+                  ( ((intptr_t)prof.profile_all.metadata[x][i]) +
+                    ( ((intptr_t)prof.profile_all.pagesize) +
+                      ((intptr_t)(prof.profile_all.pagesize * profopts.max_sample_pages))
+                    )
+                  ), prof.profile_all.metadata[x][i]->data_size
+                 );
+        }
+      }
+      fflush(profopts.profile_output_file);
+#endif
+#if 0
+      if(head == prof.profile_all.prev_head[x][i]) {
+        pid_t pid;
+        int cpu, group_fd;
+        unsigned long flags;
+        
+        ioctl(prof.profile_all.fds[x][i], PERF_EVENT_IOC_DISABLE, 0);
+        close(prof.profile_all.fds[x][i]);
+        munmap( prof.profile_all.metadata[x][i], 
+          prof.profile_all.pagesize +
+          (prof.profile_all.pagesize * profopts.max_sample_pages)
+        );
+
+        if(profopts.profile_all_cpus[x] == -1) {
+          pid = 0;
+        } else {
+          pid = -1;
+        }
+        cpu = profopts.profile_all_cpus[x];
+        group_fd = -1;
+        flags = 0;
+
+        prof.profile_all.fds[x][i] = syscall(__NR_perf_event_open,
+          prof.profile_all.pes[x][i], pid, cpu, group_fd, flags);
+        if(prof.profile_all.fds[x][i] == -1) {
+          fprintf(stderr, "Error opening perf event %d (0x%llx) on cpu %d: %s\n",
+            i, prof.profile_all.pes[x][i]->config, cpu, strerror(errno));
+          exit(1);
+        }
+
+        prof.profile_all.metadata[x][i] = mmap(NULL,
+          prof.profile_all.pagesize + (prof.profile_all.pagesize *
+          profopts.max_sample_pages), PROT_READ | PROT_WRITE, MAP_SHARED,
+          prof.profile_all.fds[x][i], 0);
+        if(prof.profile_all.metadata[x][i] == MAP_FAILED) {
+          fprintf(stderr, "Failed to mmap room (%zu bytes) for perf samples. Aborting with:\n%s\n",
+                  prof.profile_all.pagesize + (prof.profile_all.pagesize * profopts.max_sample_pages), strerror(errno));
+          exit(1);
+        }
+
+        prof.profile_all.prev_head[x][i] = 0;
+        ioctl(prof.profile_all.fds[x][i], PERF_EVENT_IOC_RESET, 0);
+        ioctl(prof.profile_all.fds[x][i], PERF_EVENT_IOC_ENABLE, 0);
+        continue;
+      }
+#endif
       if(head == prof.profile_all.prev_head[x][i]) {
         continue;
       }
@@ -245,52 +336,103 @@ void profile_all_interval(int s) {
       begin = base + tail % buf_size;
       end = base + head % buf_size;
 
+
       /* Read all of the samples */
-      pthread_rwlock_rdlock(&tracker.extents_lock);
-      while(begin <= (end - 8)) {
+      if (profopts.should_profile_objects) {
 
-        header = (struct perf_event_header *)begin;
-        if(header->size == 0) {
-          break;
-        }
-        sample = (struct sample *) (begin + 8);
-        addr = (void *) (sample->addr);
+        pthread_rwlock_rdlock(&tracker.profile_objects_map_lock);
+        while(begin <= (end - 8)) {
 
-        if(addr) {
-          /* Search for which extent it goes into */
-          extent_arr_for(tracker.extents, n) {
-            if(!tracker.extents->arr[n].start && !tracker.extents->arr[n].end) continue;
-            arena = (arena_info *)tracker.extents->arr[n].arena;
-            if((addr >= tracker.extents->arr[n].start) && (addr <= tracker.extents->arr[n].end) && arena) {
+          header = (struct perf_event_header *)begin;
+          if(header->size == 0) {
+            break;
+          }
+          sample = (struct sample *) (begin + 8);
+          addr = (void *) (sample->addr);
 
-              /* Record this access */
-              get_arena_profile_all_event_prof(arena->index, i)->current++;
-              get_arena_profile_all_event_prof(arena->index, i)->total++;
+          if(addr) {
+            oit = tree_gtr(tracker.profile_objects_map, addr);
+            tree_it_prev(oit);
 
-              if (profopts.track_pages) {
-                update_page_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
-              }
+            if (tree_it_good(oit)) {
+              obj_base = tree_it_key(oit);
+              obj_size = ((tree_it_val(oit))->size);
+              site_id = ((tree_it_val(oit))->site_id);
 
-              if (profopts.track_cache_blocks) {
-                update_cache_block_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
+              if (addr < (obj_base + obj_size)) {
+                sit = tree_lookup(tracker.profile_sites_map, site_id);
+                if (tree_it_good(sit)) {
+                  site_profile = tree_it_val(sit);
+                  site_profile[i] += 1; 
+                }
+
+                if (profopts.track_pages) {
+                  update_page_rec(addr, i, 1, &site_id);
+                }
+
+                if (profopts.track_cache_blocks) {
+                  update_cache_block_rec(addr, i, 1, &site_id);
+                }
               }
             }
           }
-        }
 
-        /* Increment begin by the size of the sample */
-        if(((char *)header + header->size) == base + buf_size) {
-          begin = base;
-        } else {
-          begin = begin + header->size;
+          /* Increment begin by the size of the sample */
+          if(((char *)header + header->size) == base + buf_size) {
+            begin = base;
+          } else {
+            begin = begin + header->size;
+          }
         }
+        pthread_rwlock_unlock(&tracker.profile_objects_map_lock);
+
+      } else {
+
+        pthread_rwlock_rdlock(&tracker.extents_lock);
+        while(begin <= (end - 8)) {
+
+          header = (struct perf_event_header *)begin;
+          if(header->size == 0) {
+            break;
+          }
+          sample = (struct sample *) (begin + 8);
+          addr = (void *) (sample->addr);
+
+          if(addr) {
+            /* Search for which extent it goes into */
+            extent_arr_for(tracker.extents, n) {
+              if(!tracker.extents->arr[n].start && !tracker.extents->arr[n].end) continue;
+              arena = (arena_info *)tracker.extents->arr[n].arena;
+              if((addr >= tracker.extents->arr[n].start) && (addr <= tracker.extents->arr[n].end) && arena) {
+
+                /* Record this access */
+                get_arena_profile_all_event_prof(arena->index, i)->current++;
+                get_arena_profile_all_event_prof(arena->index, i)->total++;
+
+                if (profopts.track_pages) {
+                  update_page_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
+                }
+
+                if (profopts.track_cache_blocks) {
+                  update_cache_block_rec(addr, i, arena->num_alloc_sites, arena->alloc_sites);
+                }
+              }
+            }
+          }
+
+          /* Increment begin by the size of the sample */
+          if(((char *)header + header->size) == base + buf_size) {
+            begin = base;
+          } else {
+            begin = begin + header->size;
+          }
+        }
+        pthread_rwlock_unlock(&tracker.extents_lock);
       }
-      pthread_rwlock_unlock(&tracker.extents_lock);
-
+    
       /* Let perf know that we've read this far */
       prof.profile_all.metadata[x][i]->data_tail = head;
       __sync_synchronize();
-
     }
   }
 
@@ -348,6 +490,10 @@ void update_page_rec(addr_t addr, size_t evt, int arena_num_alloc_sites, int *ar
     tree_insert(prof.profile->page_map, page_addr, page_rec);
   } else {
     page_rec = tree_it_val(it);
+  }
+
+  if (page_rec->pfn == PFN_INVALID) {
+    get_pfn(prof.profile_all.pagemap_fd, addr, page_rec);
   }
 
   if (page_rec->alloc_sites == NULL) {

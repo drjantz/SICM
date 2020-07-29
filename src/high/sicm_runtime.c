@@ -111,6 +111,109 @@ void profile_allocs_free(void *ptr) {
 }
 
 /*************************************************
+ *            PROFILE_OBJECTS                    *
+ *************************************************
+ *  Used to record objects with site ids in a tree. Allows profile_all with
+ *  in-place arena layouts. Enable with 'should_profile_objects'.
+ */
+void profile_objects_alloc(void *ptr, size_t size, int site_id) {
+  object_info_ptr oip;
+  uint64_t_ptr site_rec;
+  tree_it(int, uint64_t_ptr) sit;
+  tree_it(addr_t, object_info_ptr) oit;
+  uint64_t *cur_site_size, *peak_site_size;
+
+  /* Construct the object_info struct */
+  oip = (object_info_ptr) orig_malloc(sizeof(object_info));
+  if (oip == NULL) {
+    fprintf(stderr, "profile_objects_alloc: out of memory\n");
+    exit(-ENOMEM);
+  }
+  oip->size = size;
+  oip->site_id = site_id;
+
+  /* Add it to the map */
+  pthread_rwlock_wrlock(&tracker.profile_objects_map_lock);
+
+  site_rec = get_site_rec(tracker.profile_sites_map, site_id);
+  peak_site_size = &(site_rec[prof.profile->num_profile_all_events]);
+  cur_site_size  = &(site_rec[prof.profile->num_profile_all_events+1]);
+
+  (*cur_site_size) += size;
+  if ( (*cur_site_size) > (*peak_site_size) ) {
+    (*peak_site_size) = (*cur_site_size);
+  }
+
+  tree_insert(tracker.profile_objects_map, ptr, oip);
+  pthread_rwlock_unlock(&tracker.profile_objects_map_lock);
+}
+void profile_objects_realloc(void *ptr, void *old_ptr, size_t size, int site_id) {
+  object_info_ptr oip, old_oip;
+  uint64_t_ptr site_rec;
+  tree_it(int, uint64_t_ptr) sit;
+  tree_it(addr_t, object_info_ptr) oit;
+  uint64_t *cur_site_size, *peak_site_size;
+
+  /* Construct the struct that logs this allocation's arena
+   * index and size of the allocation */
+  oip = (object_info_ptr) orig_malloc(sizeof(object_info));
+  if (oip == NULL) {
+    fprintf(stderr, "profile_objects_realloc: out of memory\n");
+    exit(-ENOMEM);
+  }
+  oip->size = size;
+  oip->site_id = site_id;
+
+  /* Replace in the map */
+  pthread_rwlock_wrlock(&tracker.profile_objects_map_lock);
+
+  site_rec = get_site_rec(tracker.profile_sites_map, site_id);
+  peak_site_size = &(site_rec[prof.profile->num_profile_all_events]);
+  cur_site_size  = &(site_rec[prof.profile->num_profile_all_events+1]);
+
+  if (old_ptr != NULL) {
+    oit = tree_lookup(tracker.profile_objects_map, old_ptr);
+    if (tree_it_good(oit)) {
+      old_oip = tree_it_val(oit);
+      (*cur_site_size) -= old_oip->size;
+    }
+  }
+
+  (*cur_site_size) += size;
+  if ( (*cur_site_size) > (*peak_site_size) ) {
+    (*peak_site_size) = (*cur_site_size);
+  }
+
+  tree_delete(tracker.profile_objects_map, ptr);
+  tree_insert(tracker.profile_objects_map, ptr, oip);
+
+  pthread_rwlock_unlock(&tracker.profile_objects_map_lock);
+}
+void profile_objects_free(void *ptr) {
+  object_info_ptr oip;
+  uint64_t_ptr site_rec;
+  tree_it(addr_t, object_info_ptr) oit;
+  uint64_t *cur_site_size;
+
+  /* Look up the pointer in the map */
+  pthread_rwlock_wrlock(&tracker.profile_objects_map_lock);
+  if (ptr != NULL) {
+    oip = NULL;
+    oit = tree_lookup(tracker.profile_objects_map, ptr);
+    if (tree_it_good(oit)) {
+      oip = tree_it_val(oit);
+      site_rec = get_site_rec(tracker.profile_sites_map, oip->site_id);
+      cur_site_size = &(site_rec[prof.profile->num_profile_all_events+1]);
+      (*cur_site_size) -= oip->size;
+    }
+  }
+
+  /* Remove the allocation from the map */
+  tree_delete(tracker.profile_objects_map, ptr);
+  pthread_rwlock_unlock(&tracker.profile_objects_map_lock);
+}
+
+/*************************************************
  *            UTILITY FUNCTIONS                  *
  *************************************************
  *  Miscellaneous utility functions for allocation.
@@ -457,6 +560,10 @@ void* sh_realloc(int id, void *ptr, size_t sz) {
     index = get_arena_index(id, sz);
     ret = sicm_arena_realloc(tracker.arenas[index]->arena, ptr, sz);
 
+    if(profopts.should_profile_objects) {
+      profile_objects_realloc(ret, ptr, sz, id);
+    }
+    /* XXX: MJ -- ret is not always equal to ptr ... I think this is a bug */
     if(profopts.should_profile_allocs) {
       profile_allocs_realloc(ptr, sz, index);
     }
@@ -481,6 +588,10 @@ void* sh_alloc(int id, size_t sz) {
   index = get_arena_index(id, sz);
   ret = sicm_arena_alloc(tracker.arenas[index]->arena, sz);
 
+  if (profopts.should_profile_objects) {
+    profile_objects_alloc(ret, sz, id);
+  }
+
   if(profopts.should_profile_allocs) {
     profile_allocs_alloc(ret, sz, index);
   }
@@ -502,6 +613,10 @@ void* sh_aligned_alloc(int id, size_t alignment, size_t sz) {
 
   index = get_arena_index(id, sz);
   ret = sicm_arena_alloc_aligned(tracker.arenas[index]->arena, sz, alignment);
+
+  if (profopts.should_profile_objects) {
+    profile_objects_alloc(ret, sz, id);
+  }
 
   if(profopts.should_profile_allocs) {
     profile_allocs_alloc(ret, sz, index);
@@ -540,6 +655,10 @@ void sh_free(void* ptr) {
   if(!sh_initialized || (tracker.layout == INVALID_LAYOUT)) {
     je_dallocx(ptr, MALLOCX_TCACHE_NONE);
     return;
+  }
+
+  if (profopts.should_profile_objects) {
+    profile_objects_free(ptr);
   }
 
   if(profopts.should_run_rdspy) {

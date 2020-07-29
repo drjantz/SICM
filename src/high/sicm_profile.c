@@ -211,6 +211,10 @@ void profile_master_interval(int s) {
     }
   }
 
+  if(profopts.should_profile_dirty) {
+    profile_dirty_post_interval();
+  }
+
   /* Store this past interval's profiling information */
   if(prof.profile->num_intervals) {
     prof.prev_interval = &(prof.profile->intervals[prof.profile->num_intervals - 1]);
@@ -222,6 +226,31 @@ void profile_master_interval(int s) {
   idx = prof.profile->num_intervals - 1;
   prof.profile->intervals[idx].arenas = orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
   prof.cur_interval = &(prof.profile->intervals[idx]);
+
+#if 0
+  /* XXX */
+  for(n = 0; n < ((prof.profile->num_profile_all_events)+1); n++) {
+    prof.val_prof.events[n].current = 0;
+  }
+  for(n = 0; n < prof.profile->num_profile_all_events; n++) {
+    arena_arr_for(i) {
+      prof_check_good(arena, aprof, i);
+      prof.val_prof.events[n].current += aprof->profile_all.events[n].current;
+    }
+  }
+  arena_arr_for(i) {
+    prof_check_good(arena, aprof, i);
+    prof.val_prof.events[prof.profile->num_profile_all_events].current += aprof->profile_rss.peak;
+  }
+
+  fprintf(profopts.profile_output_file, "%-6d", prof.profile->num_intervals-1);
+  for(n = 0; n < ((prof.profile->num_profile_all_events)+1); n++) {
+    fprintf(profopts.profile_output_file, "%-24zu", prof.val_prof.events[n].current);
+  }
+  fprintf(profopts.profile_output_file, "\n");
+  fflush(profopts.profile_output_file);
+  /* XXX */
+#endif
 
   arena_arr_for(i) {
     prof_check_good(arena, aprof, i);
@@ -327,6 +356,11 @@ void *profile_master(void *a) {
   sigset_t mask;
   pid_t tid;
 
+  prof.val_prof.events = (per_event_profile_all_info*) orig_malloc(
+                           (prof.profile->num_profile_all_events+1) *
+                           sizeof(per_event_profile_all_info)
+                         );
+
   if(profopts.should_profile_all) {
     setup_profile_thread(&profile_all,
                           &profile_all_interval,
@@ -356,6 +390,12 @@ void *profile_master(void *a) {
                           &profile_online_interval,
                           &profile_online_skip_interval,
                           profopts.profile_online_skip_intervals);
+  }
+  if(profopts.should_profile_dirty) {
+    setup_profile_thread(&profile_dirty,
+                         &profile_dirty_interval,
+                         &profile_dirty_skip_interval,
+                         profopts.profile_dirty_skip_intervals);
   }
 
   /* Initialize synchronization primitives */
@@ -475,8 +515,16 @@ void initialize_profiling() {
   if(profopts.should_profile_allocs) {
     profile_allocs_init();
   }
+  if(profopts.should_profile_objects) {
+    tracker.profile_objects_map = tree_make(addr_t, object_info_ptr);
+    tracker.profile_sites_map = tree_make(int, uint64_t_ptr);
+    pthread_rwlock_init(&tracker.profile_objects_map_lock, NULL);
+  }
   if(profopts.should_profile_online) {
     profile_online_init();
+  }
+  if(profopts.should_profile_dirty) {
+    profile_dirty_init();
   }
 }
 

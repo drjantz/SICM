@@ -25,6 +25,7 @@ void profile_rss_post_interval(arena_profile *);
 
 void profile_rss_arena_init(profile_rss_info *info) {
   info->peak = 0;
+  info->current = 0;
 }
 
 void profile_rss_deinit() {
@@ -40,6 +41,7 @@ void profile_rss_init() {
   prof.profile_rss.pfndata = NULL;
   prof.profile_rss.addrsize = sizeof(uint64_t);
   prof.profile_rss.pagesize = (size_t) sysconf(_SC_PAGESIZE);
+  prof.profile_rss.bailout = 0;
 }
 
 void *profile_rss(void *a) {
@@ -55,10 +57,19 @@ void profile_rss_skip_interval(int s) {
 
 void profile_rss_interval(int s) {
   size_t i, n, numpages;
+  unsigned long long prof_rate;
   uint64_t start, end;
   arena_info *arena;
   ssize_t num_read;
   arena_profile *aprof;
+  struct timespec start_time, end_time, elapsed_time, target_time;
+
+  if (prof.profile_rss.bailout) {
+    prof.profile_rss.bailout = 0;
+    return;
+  }
+
+  clock_gettime(CLOCK_MONOTONIC, &start_time);
 
   /* Grab the lock for the extents array */
   pthread_rwlock_rdlock(&tracker.extents_lock);
@@ -103,6 +114,15 @@ void profile_rss_interval(int s) {
 
   pthread_rwlock_unlock(&tracker.extents_lock);
 
+  clock_gettime(CLOCK_MONOTONIC, &end_time);
+  timespec_diff(&start_time, &end_time, &elapsed_time);
+  prof_rate = (profopts.profile_rate_nseconds * profopts.profile_rss_skip_intervals);
+  target_time.tv_sec = prof_rate / 1000000000;
+  target_time.tv_nsec = prof_rate % 1000000000;
+  if (timespec_cmp(&target_time, &elapsed_time) != 0) {
+    prof.profile_rss.bailout = 1;
+  }
+
   end_interval();
 }
 
@@ -115,4 +135,5 @@ void profile_rss_post_interval(arena_profile *info) {
   if(aprof->current > aprof->peak) {
     aprof->peak = aprof->current;
   }
+  aprof->current = 0;
 }

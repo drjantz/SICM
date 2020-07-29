@@ -151,6 +151,26 @@ void set_options() {
     }
   }
 
+  env = getenv("SH_SITE_PROFILE_OUTPUT_FILE");
+  profopts.site_profile_output_file = NULL;
+  if(env) {
+    profopts.site_profile_output_file = fopen(env, "w");
+    if(!profopts.site_profile_output_file) {
+      fprintf(stderr, "Failed to open page profile output file. Aborting.\n");
+      exit(1);
+    }
+  }
+
+  env = getenv("SH_DIRTY_PROFILE_OUTPUT_FILE");
+  profopts.dirty_profile_output_file = NULL;
+  if(env) {
+    profopts.dirty_profile_output_file = fopen(env, "w");
+    if(!profopts.dirty_profile_output_file) {
+      fprintf(stderr, "Failed to open dirty profile output file. Aborting.\n");
+      exit(1);
+    }
+  }
+
   /* Output the chosen options to this file */
   env = getenv("SH_LOG_FILE");
   tracker.log_file = NULL;
@@ -414,6 +434,8 @@ void set_options() {
     env = getenv("SH_PROFILE_ALL_NODES");
     profopts.num_profile_all_cpus = 0;
     profopts.profile_all_cpus = NULL;
+    //fprintf(tracker.log_file, "SH_PROFILE_ALL_NODES=%s\n", env);
+    //fflush(tracker.log_file);
     if(env) {
       /* First, get a list of nodes that the user specified */
       nodes = numa_parse_nodestring(env);
@@ -432,6 +454,8 @@ void set_options() {
               profopts.num_profile_all_cpus++;
               profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
               profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
+              //fprintf(tracker.log_file, "profile_all[%d] = %d\n", profopts.num_profile_all_cpus - 1, cpu);
+              //fflush(tracker.log_file);
             }
           }
         }
@@ -446,6 +470,8 @@ void set_options() {
           profopts.num_profile_all_cpus++;
           profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
           profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
+          //fprintf(tracker.log_file, "profile_all[%d] = %d\n", profopts.num_profile_all_cpus - 1, cpu);
+          //fflush(tracker.log_file);
         }
       }
     }
@@ -524,6 +550,17 @@ void set_options() {
   }
 
   /* Should we keep track of when each allocation happened, in intervals? */
+  env = getenv("SH_PRINT_PER_INTERVAL_PROFILE");
+  profopts.print_per_interval_profile = 0;
+  if(env) {
+    profopts.print_per_interval_profile = 1;
+  }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_PRINT_PER_INTERVAL_PROFILE: %d\n",
+      profopts.print_per_interval_profile);
+  }
+
+  /* Should we keep track of when each allocation happened, in intervals? */
   env = getenv("SH_PROFILE_ALLOCS");
   profopts.should_profile_allocs = 0;
   if(env) {
@@ -531,6 +568,16 @@ void set_options() {
   }
   if(tracker.log_file) {
     fprintf(tracker.log_file, "SH_PROFILE_ALLOCS: %d\n", profopts.should_profile_allocs);
+  }
+
+  /* Should we keep track of when each object and its site ID */
+  env = getenv("SH_PROFILE_OBJECTS");
+  profopts.should_profile_objects = 0;
+  if(env) {
+    profopts.should_profile_objects = 1;
+  }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_PROFILE_OBJECTS: %d\n", profopts.should_profile_objects);
   }
 
   /* Should we profile (by isolating) a single allocation site onto a NUMA node
@@ -649,6 +696,10 @@ void set_options() {
       profopts.profile_rss_skip_intervals = strtoul(env, NULL, 0);
     }
   }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_PROFILE_RSS: %d\n", profopts.should_profile_rss);
+    fprintf(tracker.log_file, "SH_PROFILE_RSS_SKIP_INTERVALS: %d\n", profopts.profile_rss_skip_intervals);
+  }
 
   env = getenv("SH_PROFILE_EXTENT_SIZE");
   profopts.should_profile_extent_size = 0;
@@ -674,6 +725,21 @@ void set_options() {
     }
   }
 
+
+  /* Should we get the dirty of each arena? */
+  env = getenv("SH_PROFILE_DIRTY");
+  profopts.should_profile_dirty = 0;
+  profopts.profile_dirty_skip_intervals = 0;
+  if(env) {
+    profopts.should_profile_dirty = 1;
+
+    env = getenv("SH_PROFILE_DIRTY_SKIP_INTERVALS");
+    profopts.profile_dirty_skip_intervals = 1;
+    if(env) {
+      profopts.profile_dirty_skip_intervals = strtoul(env, NULL, 0);
+    }
+  }
+
   /* What sample frequency should we use? Default is 2048. Higher
    * frequencies will fill up the sample pages (below) faster.
    */
@@ -682,13 +748,14 @@ void set_options() {
   if(env) {
     tmp_val = strtoimax(env, NULL, 10);
     if((tmp_val <= 0)) {
-      fprintf(stderr, "Invalid sample frequency given. Aborting.\n");
+      fprintf(stderr, "Invalid sample frequency given: %d. Aborting.\n", tmp_val);
       exit(1);
     } else {
       profopts.sample_freq = (int) tmp_val;
     }
   }
 
+#if 0
   /* How many samples should be collected by perf, maximum?
    * Assuming we're only tracking addresses, this number is multiplied by
    * the page size and divided by 16 to get the maximum number of samples.
@@ -707,6 +774,21 @@ void set_options() {
       profopts.max_sample_pages = (int) tmp_val;
     }
   }
+#endif
+#if 1
+  env = getenv("SH_MAX_SAMPLE_PAGES");
+  profopts.max_sample_pages = 64;
+  if(env) {
+    tmp_val = strtoimax(env, NULL, 10);
+    /* Value needs to be non-negative and a power of 2. */
+    if((tmp_val <= 0) || (tmp_val & (tmp_val - 1))) {
+      fprintf(stderr, "Invalid number of pages given. Aborting.\n");
+      exit(1);
+    } else {
+      profopts.max_sample_pages = (int) tmp_val;
+    }
+  }
+#endif
 
   /* Get the devices */
   env = getenv("SH_UPPER_NODE");

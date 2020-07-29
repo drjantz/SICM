@@ -26,6 +26,7 @@
 #define CACHE_BLOCK_SHIFT 6
 #define PAGE_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> PAGE_SHIFT))
 #define CACHE_BLOCK_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> CACHE_BLOCK_SHIFT))
+#define PFN_INVALID 1ull
 
 /* Profiling information for one arena */
 typedef struct arena_profile {
@@ -43,6 +44,7 @@ typedef struct region_profile {
   size_t num_alloc_sites;
   int *alloc_sites;
   profile_all_info rprof;
+  uint64_t pfn;
 } region_profile;
 typedef region_profile * region_profile_ptr;
 
@@ -54,6 +56,7 @@ use_tree(region_profile_ptr, addr_t);
 void profile_all_post_interval_region_map( tree(addr_t, region_profile_ptr) );
 void timespec_diff(struct timespec *start, struct timespec *stop,
                    struct timespec *result);
+char timespec_cmp(struct timespec *a, struct timespec *b);
 #endif
 
 typedef struct interval_profile {
@@ -127,6 +130,9 @@ typedef struct profiler {
   profile_extent_size_data profile_extent_size;
   profile_allocs_data profile_allocs;
   profile_online_data profile_online;
+  profile_dirty_data profile_dirty;
+
+  profile_all_info val_prof;
 } profiler;
 
 extern profiler prof;
@@ -173,6 +179,24 @@ static inline void copy_region_map(
   }
 }
 
+static inline uint64_t_ptr get_new_site_profile() {
+  size_t i;
+  uint64_t_ptr rec;
+
+  rec = (uint64_t_ptr) orig_malloc( sizeof(uint64_t) *
+        (prof.profile->num_profile_all_events + 2) );
+  if (rec == NULL) {
+    printf("site_profile: out of memory\n");
+    exit(-ENOMEM);
+  }
+
+  for (i = 0; i < (prof.profile->num_profile_all_events+2); i++) {
+    rec[i] = 0ull;
+  }
+
+  return rec;
+}
+
 static inline region_profile_ptr get_new_region_profile() {
   size_t i;
   region_profile_ptr rp;
@@ -197,6 +221,7 @@ static inline region_profile_ptr get_new_region_profile() {
 
   rp->alloc_sites = NULL;
   rp->num_alloc_sites = 0;
+  rp->pfn = PFN_INVALID;
   return rp;
 }
 
@@ -214,6 +239,29 @@ static inline void reset_region_map( tree(addr_t, region_profile_ptr) map)
     }
   }
 }
+
+static uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_site) {
+  tree_it(int, uint64_t_ptr) it;
+  uint64_t_ptr site_rec;
+  size_t i;
+
+  it = tree_lookup(site_profile, cur_site);
+  if (!(tree_it_good(it))) {
+    site_rec = orig_malloc(sizeof(uint64_t)*(prof.profile->num_profile_all_events+2));
+    if (site_rec == NULL) {
+      fprintf(stderr, "sh_print_profiling: out of memory\n");
+      exit(-ENOMEM);
+    }
+    for (i = 0; i < (prof.profile->num_profile_all_events+2); i++) {
+      site_rec[i] = 0ull;
+    }
+    tree_insert(site_profile, cur_site, site_rec);
+  } else {
+    site_rec = tree_it_val(it);
+  }
+  return site_rec;
+}
+
 
 #define prof_check_good(a, p, i) \
   a = tracker.arenas[i]; \
