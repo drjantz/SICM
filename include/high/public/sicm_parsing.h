@@ -54,43 +54,10 @@ static void sh_print_site_profile(FILE *file,
    structure and prints it out so that it can
  * be seamlessly read back in */
 static void sh_print_profiling(application_profile *info, FILE *file) {
-  size_t i, n, x, cur_interval;
+  size_t i, n, x, cur_interval, first_interval;
   arena_profile *aprof;
 
-#ifdef SICM_RUNTIME
-  tree(int, uint64_t_ptr) site_profile;
-  int cur_site, agg_site_profile;
-  uint64_t_ptr site_rec;
-  //profile_all_info val_prof;
-
-  agg_site_profile = 0;
-  if (profopts.site_profile_output_file) {
-    if (tracker.profile_sites_map == NULL) {
-      tracker.profile_sites_map = tree_make(int, uint64_t_ptr);
-      agg_site_profile = 1;
-    }
-  }
-
 #if 0
-  val_prof.events = (per_event_profile_all_info*) orig_malloc(
-                      (info->num_profile_all_events+1) *
-                      sizeof(per_event_profile_all_info)
-                    );
-
-  fprintf(file, "%-6s", "val");
-  for(i = 0; i < info->num_profile_all_events; i++) {
-    if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_LLC_MISS_RETIRED:LOCAL_DRAM") == 0) {
-      fprintf(file, "%-34s", "local_dram_reads");
-    } else if (strcmp(info->profile_all_events[i], "MEM_LOAD_UOPS_RETIRED:LOCAL_PMM") == 0) {
-      fprintf(file, "%-34s", "local_pmm_reads");
-    } else {
-      fprintf(file, "%-34s", info->profile_all_events[i]);
-    }
-  }
-  fprintf(file, "%-34s\n", "RSS");
-#endif
-
-
   for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
 #if 0
     for(n = 0; n < ((info->num_profile_all_events)+1); n++) {
@@ -104,6 +71,99 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
       fprintf(file, "Upper Capacity: %zu\n", info->upper_capacity);
       fprintf(file, "Lower Capacity: %zu\n", info->lower_capacity);
     }
+=======
+#endif
+  arena_info *arena;
+  profile_rss_info *profile_rss_aprof;
+  per_skt_profile_bw_info *profile_bw_aprof;
+  per_skt_profile_latency_info *profile_latency_aprof;
+
+#ifdef SICM_RUNTIME
+  tree(int, uint64_t_ptr) site_profile;
+  int cur_site, agg_site_profile;
+  uint64_t_ptr site_rec;
+
+  agg_site_profile = 0;
+  if (profopts.site_profile_output_file) {
+    if (tracker.profile_sites_map == NULL) {
+      tracker.profile_sites_map = tree_make(int, uint64_t_ptr);
+      agg_site_profile = 1;
+    }
+  }
+
+  if(profopts.print_profile_intervals || agg_site_profile) {
+    first_interval = 0;
+  } else {
+    first_interval = info->num_intervals - 1;
+  }
+#else
+  first_interval = 0;
+#endif
+  
+  /* If we're not printing every interval's profiling, just skip to the last
+     interval. If we're not in SICM's runtime library, we're just going to 
+     print all intervals no matter what. */
+
+  for(cur_interval = first_interval; cur_interval < info->num_intervals; cur_interval++) {
+    if (profopts.print_profile_intervals) {
+      /* Common information for the whole application */
+      fprintf(file, "===== BEGIN INTERVAL %zu PROFILING =====\n", cur_interval);
+      if(info->has_profile_all) {
+        fprintf(file, "Number of PROFILE_ALL events: %zu\n", info->num_profile_all_events);
+      }
+      if(info->has_profile_bw) {
+        fprintf(file, "Number of PROFILE_BW sockets: %zu\n", info->num_profile_skts);
+      }
+      fprintf(file, "Time: %.4lf\n", info->intervals[cur_interval].time);
+      if(info->has_profile_online) {
+        fprintf(file, "Reconfigure: %d\n", info->intervals[cur_interval].profile_online.reconfigure);
+        fprintf(file, "Phase Change: %d\n", info->intervals[cur_interval].profile_online.phase_change);
+        fprintf(file, "Upper Capacity: %zu\n", info->upper_capacity);
+        fprintf(file, "Lower Capacity: %zu\n", info->lower_capacity);
+      }
+      fprintf(file, "Number of arenas: %zu\n", info->intervals[cur_interval].num_arenas);
+      
+      /* Non-arena profiling info */
+      if(info->has_profile_bw) {
+        fprintf(file, "  BEGIN PROFILE_BW\n");
+        for(n = 0; n < info->num_profile_skts; n++) {
+          profile_bw_aprof = &(info->intervals[cur_interval].profile_bw.skt[n]);
+          fprintf(file, "    BEGIN SOCKET %d\n", info->profile_skts[n]);
+          fprintf(file, "      Current: %zu\n", profile_bw_aprof->current);
+          fprintf(file, "      Peak: %zu\n", profile_bw_aprof->peak);
+          fprintf(file, "    END SOCKET %d\n", info->profile_skts[n]);
+        }
+        fprintf(file, "  END PROFILE_BW\n");
+      }
+      if(info->has_profile_rss) {
+        fprintf(file, "  BEGIN PROFILE_RSS\n");
+        profile_rss_aprof = &(info->intervals[cur_interval].profile_rss);
+        fprintf(file, "    Time: %f\n", profile_rss_aprof->time);
+        fprintf(file, "  END PROFILE_RSS\n");
+      }
+      if(info->has_profile_latency) {
+        fprintf(file, "  BEGIN PROFILE_LATENCY\n");
+        for(n = 0; n < info->num_profile_skts; n++) {
+          profile_latency_aprof = &(info->intervals[cur_interval].profile_latency.skt[n]);
+          fprintf(file, "    BEGIN SOCKET %d\n", info->profile_skts[n]);
+          fprintf(file, "      Upper Read Current: %f\n", profile_latency_aprof->upper_read_current);
+          fprintf(file, "      Upper Read Peak: %f\n", profile_latency_aprof->upper_read_peak);
+          fprintf(file, "      Upper Write Current: %f\n", profile_latency_aprof->upper_write_current);
+          fprintf(file, "      Upper Write Peak: %f\n", profile_latency_aprof->upper_write_peak);
+          fprintf(file, "      Lower Read Current: %f\n", profile_latency_aprof->lower_read_current);
+          fprintf(file, "      Lower Read Peak: %f\n", profile_latency_aprof->lower_read_peak);
+          fprintf(file, "      Lower Write Current: %f\n", profile_latency_aprof->lower_write_current);
+          fprintf(file, "      Lower Write Peak: %f\n", profile_latency_aprof->lower_write_peak);
+          fprintf(file, "      Read Ratio: %f\n", profile_latency_aprof->read_ratio);
+          fprintf(file, "      Write Ratio: %f\n", profile_latency_aprof->write_ratio);
+          fprintf(file, "      Read Ratio CMA: %f\n", profile_latency_aprof->read_ratio_cma);
+          fprintf(file, "      Write Ratio CMA: %f\n", profile_latency_aprof->write_ratio_cma);
+          fprintf(file, "    END SOCKET %d\n", info->profile_skts[n]);
+        }
+        fprintf(file, "  END PROFILE_LATENCY\n");
+      }
+    }
+
     for(i = 0; i < info->intervals[cur_interval].num_arenas; i++) {
       aprof = info->intervals[cur_interval].arenas[i];
       if(!aprof) continue;
@@ -120,13 +180,12 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
       }
       cur_site = (aprof->num_alloc_sites == 1) ? aprof->alloc_sites[0] : 0;
 
-      if(profopts.should_profile_all) {
-        if (profopts.print_per_interval_profile) {
+      if(info->has_profile_all) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  BEGIN PROFILE_ALL\n");
         }
-
         for(n = 0; n < info->num_profile_all_events; n++) {
-          if (profopts.print_per_interval_profile) {
+          if (profopts.print_profile_intervals) {
             fprintf(file, "    BEGIN EVENT %s\n", info->profile_all_events[n]);
             fprintf(file, "      Total: %zu\n", aprof->profile_all.events[n].total);
             fprintf(file, "      Current: %zu\n", aprof->profile_all.events[n].current);
@@ -137,23 +196,23 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
           if (agg_site_profile) {
             site_rec = get_site_rec(tracker.profile_sites_map, cur_site);
             site_rec[n] += aprof->profile_all.events[n].current;
-            //val_prof.events[n].current += aprof->profile_all.events[n].current;
           }
         }
-        if (profopts.print_per_interval_profile) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  END PROFILE_ALL\n");
         }
       }
-      if(profopts.should_profile_allocs) {
-        if (profopts.print_per_interval_profile) {
+
+      if(info->has_profile_allocs) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  BEGIN PROFILE_ALLOCS\n");
           fprintf(file, "    Peak: %zu\n", aprof->profile_allocs.peak);
           fprintf(file, "    Current: %zu\n", aprof->profile_allocs.current);
           fprintf(file, "  END PROFILE_ALLOCS\n");
         }
       }
-      if(profopts.should_profile_rss) {
-        if (profopts.print_per_interval_profile) {
+      if(info->has_profile_rss) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  BEGIN PROFILE_RSS\n");
           fprintf(file, "    Peak: %zu\n", aprof->profile_rss.peak);
           fprintf(file, "    Current: %zu\n", aprof->profile_rss.current);
@@ -165,22 +224,27 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
           if (aprof->profile_rss.peak > site_rec[info->num_profile_all_events]) {
             site_rec[info->num_profile_all_events] = aprof->profile_rss.peak;
           }
-#if 0
-          val_prof.events[info->num_profile_all_events].current +=
-            site_rec[info->num_profile_all_events];
-#endif
         }
       }
-      if(profopts.should_profile_extent_size) {
-        if (profopts.print_per_interval_profile) {
+      if(info->has_profile_extent_size) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  BEGIN PROFILE_EXTENT_SIZE\n");
           fprintf(file, "    Peak: %zu\n", aprof->profile_extent_size.peak);
           fprintf(file, "    Current: %zu\n", aprof->profile_extent_size.current);
           fprintf(file, "  END PROFILE_EXTENT_SIZE\n");
         }
       }
-      if(profopts.should_profile_online) {
-        if (profopts.print_per_interval_profile) {
+      if(info->has_profile_bw_relative) {
+        if (profopts.print_profile_intervals) {
+          fprintf(file, "  BEGIN PROFILE_BW_RELATIVE\n");
+          fprintf(file, "    Total: %zu\n", aprof->profile_bw.total);
+          fprintf(file, "    Current: %zu\n", aprof->profile_bw.current);
+          fprintf(file, "    Peak: %zu\n", aprof->profile_bw.peak);
+          fprintf(file, "  END PROFILE_BW_RELATIVE\n");
+        }
+      }
+      if(info->has_profile_online) {
+        if (profopts.print_profile_intervals) {
           fprintf(file, "  BEGIN PROFILE_ONLINE\n");
           fprintf(file, "    Device: %d\n", aprof->profile_online.dev);
           fprintf(file, "    Hot: %d\n", aprof->profile_online.hot);
@@ -189,20 +253,12 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
           fprintf(file, "  END PROFILE_ONLINE\n");
         }
       }
-      if (profopts.print_per_interval_profile) {
+      if (profopts.print_profile_intervals) {
         fprintf(file, "END ARENA %u\n", aprof->index);
       }
     }
-
-#if 0
-    fprintf(file, "%-6d", cur_interval);
-    for(n = 0; n < ((info->num_profile_all_events)+1); n++) {
-      fprintf(file, "%-34zu", val_prof.events[n].current);
-    }
-    fprintf(file, "\n");
-#endif
-    
-    if (profopts.print_per_interval_profile) {
+ 
+    if (profopts.print_profile_intervals) {
       fprintf(file, "===== END INTERVAL PROFILING =====\n");
     }
   }
@@ -387,12 +443,21 @@ static application_profile *sh_parse_profiling(FILE *file) {
 
   /* Temporaries */
   unsigned index, tmp_uint;
-  size_t num_arenas, cur_arena_index, cur_event_index, cur_interval, tmp_sizet;
+  size_t num_arenas,
+         cur_arena_index,
+         cur_event_index,
+         cur_skt_index,
+         cur_interval,
+         tmp_sizet;
+  double tmp_double;
+  char tmp_char;
   int tmp_int, site;
   char *event;
   size_t i;
   arena_profile *cur_arena;
   per_event_profile_all_info *cur_event;
+  per_skt_profile_bw_info *profile_bw_cur_skt;
+  per_skt_profile_latency_info *profile_latency_cur_skt;
 
   if(!file) {
     fprintf(stderr, "Invalid file pointer to be parsed. Aborting.\n");
@@ -414,11 +479,15 @@ static application_profile *sh_parse_profiling(FILE *file) {
      2: profile_extent_size
      3: profile_rss
      4: profile_online
+     5: profile_bw
+     6: profile_bw_relative
+     7: profile_latency
   */
   profile_type = -1;
 
-  ret = orig_malloc(sizeof(application_profile));
+  ret = orig_calloc(1, sizeof(application_profile));
   ret->profile_all_events = NULL;
+  ret->profile_skts = NULL;
   ret->num_intervals = 0;
   ret->intervals = NULL;
   len = 0;
@@ -435,15 +504,18 @@ static application_profile *sh_parse_profiling(FILE *file) {
         cur_interval = ret->num_intervals - 1;
         cur_arena = NULL;
         cur_event = NULL;
+        profile_bw_cur_skt = NULL;
         cur_arena_index = 0;
         cur_event_index = 0;
+        cur_skt_index = 0;
       }
 
     /* At this level, we're looking for three things:
        1. A number of arenas
        2. The start of a new arena
        3. The number of events of various types
-       3. The end of profiling information
+       4. The end of an interval
+       5. The start of some profile_bw information (since it's not per-arena)
     */
     } else if(depth == 1) {
       if(strncmp(line, "===== END INTERVAL\n", 18) == 0) {
@@ -455,10 +527,47 @@ static application_profile *sh_parse_profiling(FILE *file) {
         ret->intervals[cur_interval].arenas = orig_calloc(num_arenas, sizeof(arena_profile *));
       } else if(sscanf(line, "Number of PROFILE_ALL events: %zu\n", &tmp_sizet) == 1) {
         ret->num_profile_all_events = tmp_sizet;
+      } else if(sscanf(line, "Number of PROFILE_BW sockets: %zu\n", &tmp_sizet) == 1) {
+        ret->num_profile_skts = tmp_sizet;
       } else if(sscanf(line, "Upper Capacity: %zu\n", &tmp_sizet) == 1) {
         ret->upper_capacity = tmp_sizet;
       } else if(sscanf(line, "Lower Capacity: %zu\n", &tmp_sizet) == 1) {
         ret->lower_capacity = tmp_sizet;
+      } else if(sscanf(line, "Time: %lf\n", &tmp_double) == 1) {
+        ret->intervals[cur_interval].time = tmp_double;
+      } else if(sscanf(line, "Reconfigure: %d\n", &tmp_char) == 1) {
+        ret->intervals[cur_interval].profile_online.reconfigure = tmp_char;
+      } else if(sscanf(line, "Phase Change: %d\n", &tmp_char) == 1) {
+        ret->intervals[cur_interval].profile_online.phase_change = tmp_char;
+      } else if(strcmp(line, "  BEGIN PROFILE_BW\n") == 0) {
+        /* Down in depth */
+        depth = 2;
+        profile_type = 5;
+        ret->has_profile_bw = 1;
+        if(!(ret->profile_skts)) {
+          ret->profile_skts = orig_calloc(ret->num_profile_skts, sizeof(int));
+        }
+        ret->intervals[cur_interval].profile_bw.skt = orig_calloc(ret->num_profile_skts,
+                                                                   sizeof(per_skt_profile_bw_info));
+        cur_skt_index = 0;
+        profile_bw_cur_skt = &(ret->intervals[cur_interval].profile_bw.skt[cur_skt_index]);
+      } else if(strcmp(line, "  BEGIN PROFILE_RSS\n") == 0) {
+        /* Down in depth */
+        depth = 2;
+        profile_type = 3;
+        ret->has_profile_rss = 1;
+      } else if(strcmp(line, "  BEGIN PROFILE_LATENCY\n") == 0) {
+        /* Down in depth */
+        depth = 2;
+        profile_type = 7;
+        ret->has_profile_latency = 1;
+        if(!(ret->profile_skts)) {
+          ret->profile_skts = orig_calloc(ret->num_profile_skts, sizeof(int));
+        }
+        ret->intervals[cur_interval].profile_latency.skt = orig_calloc(ret->num_profile_skts,
+                                                                   sizeof(per_skt_profile_latency_info));
+        cur_skt_index = 0;
+        profile_latency_cur_skt = &(ret->intervals[cur_interval].profile_latency.skt[cur_skt_index]);
       } else if(sscanf(line, "BEGIN ARENA %u", &index) == 1) {
         /* Down in depth */
         depth = 2;
@@ -484,6 +593,7 @@ static application_profile *sh_parse_profiling(FILE *file) {
        1. Per-arena information (numerous).
        2. The beginning of a type of profiling.
        3. The end of an arena.
+       4. Some profile_bw information, if profile_type == 5.
     */
     } else if(depth == 2) {
       if(sscanf(line, "END ARENA %u\n", &tmp_uint) == 1) {
@@ -511,6 +621,7 @@ static application_profile *sh_parse_profiling(FILE *file) {
         /* Down in depth */
         depth = 3;
         profile_type = 0;
+        ret->has_profile_all = 1;
         if(!(ret->profile_all_events)) {
           ret->profile_all_events = orig_calloc(ret->num_profile_all_events, sizeof(char *));
         }
@@ -521,15 +632,132 @@ static application_profile *sh_parse_profiling(FILE *file) {
       } else if(strcmp(line, "  BEGIN PROFILE_ALLOCS\n") == 0) {
         depth = 3;
         profile_type = 1;
+        ret->has_profile_allocs = 1;
       } else if(strcmp(line, "  BEGIN PROFILE_EXTENT_SIZE\n") == 0) {
         depth = 3;
         profile_type = 2;
+        ret->has_profile_extent_size = 1;
       } else if(strcmp(line, "  BEGIN PROFILE_RSS\n") == 0) {
         depth = 3;
         profile_type = 3;
+        ret->has_profile_rss = 1;
+      } else if(strcmp(line, "  BEGIN PROFILE_BW_RELATIVE\n") == 0) {
+        depth = 3;
+        profile_type = 6;
+        ret->has_profile_bw_relative = 1;
       } else if(strcmp(line, "  BEGIN PROFILE_ONLINE\n") == 0) {
         depth = 3;
         profile_type = 4;
+        ret->has_profile_online = 1;
+      } else if(profile_type == 5) {
+        /* This is the case where we're in a PROFILE_BW block */
+        if(strcmp(line, "  END PROFILE_BW\n") == 0) {
+          /* Up in depth */
+          depth = 1;
+          profile_type = -1;
+        } else if(sscanf(line, "    BEGIN SOCKET %d\n", &tmp_int) == 1) {
+          /* Down in depth */
+          if(cur_skt_index > ret->num_profile_skts - 1) {
+            fprintf(stderr, "Too many sockets specified. Aborting.\n");
+            exit(1);
+          }
+          ret->profile_skts[cur_skt_index] = tmp_int;
+          profile_bw_cur_skt = &(ret->intervals[cur_interval].profile_bw.skt[cur_skt_index]);
+          depth = 3;
+        } else {
+          fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+          fprintf(stderr, "Line: %s\n", line);
+          exit(1);
+        }
+      } else if(profile_type == 3) {
+        /* This is the case where we're in a PROFILE_RSS block */
+        if(strcmp(line, "  END PROFILE_RSS\n") == 0) {
+          /* Up in depth */
+          depth = 1;
+          profile_type = -1;
+        } else if(sscanf(line, "    Time: %lf\n", &tmp_double) == 1) {
+          ret->intervals[cur_interval].profile_rss.time = tmp_double;
+        } else {
+          fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+          fprintf(stderr, "Line: %s\n", line);
+          exit(1);
+        }
+      } else if(profile_type == 7) {
+        /* This is the case where we're in a PROFILE_LATENCY block */
+        if(strcmp(line, "  END PROFILE_LATENCY\n") == 0) {
+          /* Up in depth */
+          depth = 1;
+          profile_type = -1;
+        } else if(sscanf(line, "    BEGIN SOCKET %d\n", &tmp_int) == 1) {
+          /* Down in depth */
+          if(cur_skt_index > ret->num_profile_skts - 1) {
+            fprintf(stderr, "Too many sockets specified. Aborting.\n");
+            exit(1);
+          }
+          ret->profile_skts[cur_skt_index] = tmp_int;
+          profile_latency_cur_skt = &(ret->intervals[cur_interval].profile_latency.skt[cur_skt_index]);
+          depth = 3;
+        } else {
+          fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+          fprintf(stderr, "Line: %s\n", line);
+          exit(1);
+        }
+      } else {
+        fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+        fprintf(stderr, "Line: %s\n", line);
+        exit(1);
+      }
+      
+    /* Looking for information about a specific PROFILE_BW event. This
+       is the same as PROFILE_ALL, but up one level of depth, since PROFILE_BW
+       isn't per-arena. */
+    } else if((depth == 3) && (profile_type == 5)) {
+      if(sscanf(line, "      Peak: %zu\n", &tmp_sizet)) {
+        profile_bw_cur_skt->peak = tmp_sizet;
+      } else if(sscanf(line, "      Current: %zu\n", &tmp_sizet)) {
+        profile_bw_cur_skt->current = tmp_sizet;
+      } else if(sscanf(line, "    END SOCKET %d\n", &tmp_int) == 1) {
+        /* Up in depth */
+        depth = 2;
+        cur_skt_index++;
+      } else {
+        fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+        fprintf(stderr, "Line: %s\n", line);
+        exit(1);
+      }
+      
+    /* Looking for information about a specific PROFILE_LATENCY event. This
+       is the same as PROFILE_ALL, but up one level of depth, since PROFILE_LATENCY
+       isn't per-arena. */
+    } else if((depth == 3) && (profile_type == 7)) {
+      if(sscanf(line, "      Upper Read Peak: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->upper_read_peak = tmp_double;
+      } else if(sscanf(line, "      Upper Read Current: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->upper_read_current = tmp_double;
+      } else if(sscanf(line, "      Upper Write Peak: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->upper_write_peak = tmp_double;
+      } else if(sscanf(line, "      Upper Write Current: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->upper_write_current = tmp_double;
+      } else if(sscanf(line, "      Lower Read Peak: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->lower_read_peak = tmp_double;
+      } else if(sscanf(line, "      Lower Read Current: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->lower_read_current = tmp_double;
+      } else if(sscanf(line, "      Lower Write Peak: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->lower_write_peak = tmp_double;
+      } else if(sscanf(line, "      Lower Write Current: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->lower_write_current = tmp_double;
+      } else if(sscanf(line, "      Read Ratio: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->read_ratio = tmp_double;
+      } else if(sscanf(line, "      Write Ratio: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->write_ratio = tmp_double;
+      } else if(sscanf(line, "      Read Ratio CMA: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->read_ratio_cma = tmp_double;
+      } else if(sscanf(line, "      Write Ratio CMA: %lf\n", &tmp_double)) {
+        profile_latency_cur_skt->write_ratio_cma = tmp_double;
+      } else if(sscanf(line, "    END SOCKET %d\n", &tmp_int) == 1) {
+        /* Up in depth */
+        depth = 2;
+        cur_skt_index++;
       } else {
         fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
         fprintf(stderr, "Line: %s\n", line);
@@ -617,6 +845,29 @@ static application_profile *sh_parse_profiling(FILE *file) {
         cur_arena->profile_rss.peak = tmp_sizet;
       } else if(sscanf(line, "    Current: %zu\n", &tmp_sizet)) {
         cur_arena->profile_rss.current = tmp_sizet;
+      } else {
+        fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
+        fprintf(stderr, "Line: %s\n", line);
+        exit(1);
+      }
+      
+    /* PROFILE_BW_RELATIVE
+       Looking for:
+       1. A peak.
+       2. A current value.
+       3. A total.
+       4. The end of this profiling block.
+    */
+    } else if((depth == 3) && (profile_type == 6)) {
+      if(strcmp(line, "  END PROFILE_BW_RELATIVE\n") == 0) {
+        /* Up in depth */
+        depth = 2;
+      } else if(sscanf(line, "    Peak: %zu\n", &tmp_sizet)) {
+        cur_arena->profile_bw.peak = tmp_sizet;
+      } else if(sscanf(line, "    Current: %zu\n", &tmp_sizet)) {
+        cur_arena->profile_bw.current = tmp_sizet;
+      } else if(sscanf(line, "    Total: %zu\n", &tmp_sizet)) {
+        cur_arena->profile_bw.total = tmp_sizet;
       } else {
         fprintf(stderr, "Didn't recognize a line in the profiling information at depth %d. Aborting.\n", depth);
         fprintf(stderr, "Line: %s\n", line);

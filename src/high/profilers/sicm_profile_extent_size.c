@@ -37,7 +37,7 @@ void profile_extent_size_interval(int s) {
   extent_arr_for(tracker.extents, i) {
     arena = (arena_info *) tracker.extents->arr[i].arena;
     if(!arena) continue;
-    aprof = (arena_profile *) prof.profile->arenas[arena->index];
+    aprof = get_arena_prof(arena->index);
     if(!aprof) continue;
 
     aprof->profile_extent_size.current = 1234;
@@ -47,7 +47,7 @@ void profile_extent_size_interval(int s) {
   extent_arr_for(tracker.extents, i) {
     arena = (arena_info *) tracker.extents->arr[i].arena;
     if(!arena) continue;
-    aprof = (arena_profile *) prof.profile->arenas[arena->index];
+    aprof = get_arena_prof(arena->index);
     if(!aprof) continue;
 
     start = (char *) tracker.extents->arr[i].start;
@@ -56,8 +56,6 @@ void profile_extent_size_interval(int s) {
   }
 
   pthread_rwlock_unlock(&tracker.extents_lock);
-
-  end_interval();
 }
 
 void profile_extent_size_post_interval(arena_profile *info) {
@@ -72,7 +70,6 @@ void profile_extent_size_post_interval(arena_profile *info) {
 }
 
 void profile_extent_size_skip_interval(int s) {
-  end_interval();
 }
 
 void profile_extent_size_init() {

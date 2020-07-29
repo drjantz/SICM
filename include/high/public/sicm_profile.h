@@ -18,6 +18,35 @@
 #include <errno.h>
 #include <poll.h>
 
+/* Returns 0 if "a" is bigger, 1 if "b" is bigger */
+static char timespec_cmp(struct timespec *a, struct timespec *b) {
+  if (a->tv_sec == b->tv_sec) {
+    if(a->tv_nsec > b->tv_nsec) {
+      return 0;
+    } else {
+      return 1;
+    }
+  } else if(a->tv_sec > b->tv_sec) {
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+/* Subtracts two timespec structs from each other. Assumes stop is
+ * larger than start.
+ */
+static void timespec_diff(struct timespec *start, struct timespec *stop,
+                   struct timespec *result) {
+  if ((stop->tv_nsec - start->tv_nsec) < 0) {
+    result->tv_sec = stop->tv_sec - start->tv_sec - 1;
+    result->tv_nsec = stop->tv_nsec - start->tv_nsec + 1000000000;
+  } else {
+    result->tv_sec = stop->tv_sec - start->tv_sec;
+    result->tv_nsec = stop->tv_nsec - start->tv_nsec;
+  }
+}
+
 #include "sicm_runtime.h"
 #include "sicm_profilers.h"
 #include "sicm_tree.h"
@@ -34,10 +63,11 @@ typedef struct arena_profile {
   int num_alloc_sites, *alloc_sites;
 
   profile_all_info profile_all;
-  profile_rss_info profile_rss;
   profile_extent_size_info profile_extent_size;
   profile_allocs_info profile_allocs;
-  profile_online_info profile_online;
+  per_arena_profile_rss_info profile_rss;
+  per_arena_profile_online_info profile_online;
+  per_arena_profile_bw_info profile_bw;
 } arena_profile;
 
 typedef struct region_profile {
@@ -60,29 +90,50 @@ char timespec_cmp(struct timespec *a, struct timespec *b);
 #endif
 
 typedef struct interval_profile {
+  /* Time in seconds that this interval took */
+  double time;
+  
   /* Array of arenas and their info */
   size_t num_arenas;
   arena_profile **arenas;
+
   tree(addr_t, region_profile_ptr) page_map;
   tree(addr_t, region_profile_ptr) cache_block_map;
+  
+  /* These are profiling types that can have not-per-arena
+     profiling information */
+  profile_latency_info profile_latency;
+  profile_bw_info profile_bw;
+  profile_online_info profile_online;
+  profile_rss_info profile_rss;
 } interval_profile;
 
 /* Profiling information for a whole application */
 typedef struct application_profile {
-  size_t num_intervals, num_profile_all_events,
-         num_arenas;
+  /* Flags that get set if this profile has these types of
+     profiling in it */
+  char has_profile_all,
+       has_profile_allocs,
+       has_profile_extent_size,
+       has_profile_rss,
+       has_profile_online,
+       has_profile_bw,
+       has_profile_bw_relative,
+       has_profile_latency;
+  
+  size_t num_intervals, num_profile_all_events;
 
   size_t upper_capacity, lower_capacity;
 
-  /* the last interval's page_map and cache_block_map */
-  tree(addr_t, region_profile_ptr) page_map;
-  tree(addr_t, region_profile_ptr) cache_block_map;
-
-  /* Array of the last interval's arenas */
-  arena_profile **arenas;
+  interval_profile this_interval;
 
   /* Array of event strings in the profiling */
   char **profile_all_events;
+  
+  /* Array of integers that are the NUMA nodes of the sockets
+     that we got the bandwidth of */
+  size_t num_profile_skts;
+  int *profile_skts;
 
   interval_profile *intervals;
 } application_profile;
@@ -113,12 +164,13 @@ typedef struct profiler {
   /* Sync the threads */
   pthread_mutex_t mtx;
   pthread_cond_t cond;
-  char threads_finished;
 
   /* For the main application thread to
    * signal the master to stop
    */
   int stop_signal, master_signal;
+  struct timespec start, end;
+  double target;
 
   /* Profiling information for the currently-running application */
   application_profile *profile;
@@ -132,18 +184,22 @@ typedef struct profiler {
   profile_online_data profile_online;
   profile_dirty_data profile_dirty;
 
-  profile_all_info val_prof;
+  profile_bw_data profile_bw;
+  profile_latency_data profile_latency;
 } profiler;
 
 extern profiler prof;
 
 void sh_start_profile_master_thread();
 void sh_stop_profile_master_thread();
-
-void end_interval();
-
 void create_arena_profile(int, int);
 void add_site_profile(int, int);
+
+/* Given an arena and index, check to make sure it's not NULL */
+#define prof_check_good(a, p, i) \
+  a = tracker.arenas[i]; \
+  p = prof.profile->this_interval.arenas[i]; \
+  if((!a) || (!p)) continue;
 
 static inline void copy_arena_profile(arena_profile *dst, arena_profile *src) {
   memcpy(dst, src, sizeof(arena_profile));
@@ -262,20 +318,102 @@ static uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_s
   return site_rec;
 }
 
+/* Copies an interval profile from the current one
+   (stored in prof.profile->this_interval)
+   into the array of intervals
+   (prof.profile->intervals). */
+static inline void copy_interval_profile(size_t index) {
+  arena_profile *aprof;
+  arena_info *arena;
+  interval_profile *interval, *this_interval;
+  size_t size, i;
+  
+  /* Allocate room for the interval that just finished */
+  prof.profile->intervals = orig_realloc(prof.profile->intervals,
+                                         (index + 1) * sizeof(interval_profile));
+                                         
+  /* Convenience pointers. We want to copy the contents of
+     `this_interval` into `interval`. */
+  interval = &(prof.profile->intervals[index]);
+  this_interval = &(prof.profile->this_interval);
+                                         
+  /* Copy the interval_profile from this_interval to intervals[index] */
+  interval->num_arenas = this_interval->num_arenas;
+  interval->arenas = orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
+    
+  /* Copy profile_bw profiling info, too */
+  interval->profile_bw.skt = NULL;
+  if(should_profile_bw()) {
+    size = profopts.num_profile_skt_cpus * sizeof(per_skt_profile_bw_info);
+    interval->profile_bw.skt = orig_malloc(size);
+    memcpy(interval->profile_bw.skt,
+          this_interval->profile_bw.skt,
+          size);
+  }
+  
+  /* Copy profile_latency profiling info, too */
+  interval->profile_latency.skt = NULL;
+  if(should_profile_latency()) {
+    size = profopts.num_profile_skt_cpus * sizeof(per_skt_profile_latency_info);
+    interval->profile_latency.skt = orig_malloc(size);
+    memcpy(interval->profile_latency.skt,
+          this_interval->profile_latency.skt,
+          size);
+  }
+  
+  /* Iterate over all of the arenas in the interval, and copy them too */
+  arena_arr_for(i) {
+    prof_check_good(arena, aprof, i);
+    interval->arenas[i] = orig_malloc(sizeof(arena_profile));
+    copy_arena_profile(interval->arenas[i], aprof);
+  }
 
-#define prof_check_good(a, p, i) \
-  a = tracker.arenas[i]; \
-  p = prof.profile->arenas[i]; \
-  if((!a) || (!p)) continue;
+  if (profopts.page_profile_intervals) {
+    interval->page_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(interval->page_map, this_interval->page_map);
+    profile_all_post_interval_region_map ( this_interval->page_map );
+    reset_region_map(this_interval->page_map);
+  }
+
+  if (profopts.cache_block_profile_intervals) {
+    interval->cache_block_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(interval->cache_block_map, this_interval->cache_block_map);
+    profile_all_post_interval_region_map ( this_interval->cache_block_map ); 
+    reset_region_map(this_interval->cache_block_map);
+  }
+  
+  interval->time = this_interval->time;
+  interval->profile_online.reconfigure = this_interval->profile_online.reconfigure;
+  interval->profile_online.phase_change = this_interval->profile_online.phase_change;
+  this_interval->profile_online.phase_change = 0;
+  this_interval->profile_online.reconfigure = 0;
+  interval->profile_rss.time = this_interval->profile_rss.time;
+  this_interval->profile_rss.time = 0.0;
+}
 
 #define get_arena_prof(i) \
-  prof.profile->arenas[i]
-
+  prof.profile->this_interval.arenas[i]
+  
+#define get_profile_bw_prof() \
+  (&(prof.profile->this_interval.profile_bw))
+  
+#define get_profile_rss_prof() \
+  (&(prof.profile->this_interval.profile_rss))
+  
+#define get_profile_latency_prof() \
+  (&(prof.profile->this_interval.profile_latency))
+  
+#define get_profile_online_prof() \
+  (&(prof.profile->this_interval.profile_online))
+  
 #define get_arena_online_prof(i) \
   (&(get_arena_prof(i)->profile_online))
 
 #define get_arena_all_prof(i) \
   (&(get_arena_prof(i)->profile_all))
+  
+#define get_arena_rss_prof(i) \
+  (&(get_arena_prof(i)->profile_rss))
 
 /* Since the profiling library stores an interval after it happens,
    the "previous interval" is actually the last one recorded */
@@ -287,4 +425,12 @@ static uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_s
 
 #define get_arena_profile_all_event_prof(i, n) \
   (&(get_arena_all_prof(i)->events[n]))
-
+  
+#define get_profile_bw_skt_prof(i) \
+  (&(get_profile_bw_prof()->skt[i]))
+  
+#define get_profile_latency_skt_prof(i) \
+  (&(get_profile_latency_prof()->skt[i]))
+  
+#define get_profile_bw_arena_prof(i) \
+  (&(get_arena_prof(i)->profile_bw))

@@ -20,22 +20,12 @@ enum arena_layout parse_layout(char *env) {
 
   max_chars = 32;
 
-  if(strncmp(env, "SHARED_ONE_ARENA", max_chars) == 0) {
-    return SHARED_ONE_ARENA;
-  } else if(strncmp(env, "EXCLUSIVE_ONE_ARENA", max_chars) == 0) {
-    return EXCLUSIVE_ONE_ARENA;
-  } else if(strncmp(env, "SHARED_DEVICE_ARENAS", max_chars) == 0) {
-    return SHARED_DEVICE_ARENAS;
+  if(strncmp(env, "EXCLUSIVE_ARENAS", max_chars) == 0) {
+    return EXCLUSIVE_ARENAS;
   } else if(strncmp(env, "EXCLUSIVE_DEVICE_ARENAS", max_chars) == 0) {
     return EXCLUSIVE_DEVICE_ARENAS;
   } else if(strncmp(env, "SHARED_SITE_ARENAS", max_chars) == 0) {
     return SHARED_SITE_ARENAS;
-  } else if(strncmp(env, "EXCLUSIVE_SITE_ARENAS", max_chars) == 0) {
-    return EXCLUSIVE_SITE_ARENAS;
-  } else if(strncmp(env, "EXCLUSIVE_TWO_DEVICE_ARENAS", max_chars) == 0) {
-    return EXCLUSIVE_TWO_DEVICE_ARENAS;
-  } else if(strncmp(env, "EXCLUSIVE_FOUR_DEVICE_ARENAS", max_chars) == 0) {
-    return EXCLUSIVE_FOUR_DEVICE_ARENAS;
   } else if(strncmp(env, "BIG_SMALL_ARENAS", max_chars) == 0) {
     return BIG_SMALL_ARENAS;
   }
@@ -46,22 +36,12 @@ enum arena_layout parse_layout(char *env) {
 /* Converts an arena_layout to a string */
 char *layout_str(enum arena_layout layout) {
   switch(layout) {
-    case SHARED_ONE_ARENA:
-      return "SHARED_ONE_ARENA";
-    case EXCLUSIVE_ONE_ARENA:
-      return "EXCLUSIVE_ONE_ARENA";
-    case SHARED_DEVICE_ARENAS:
-      return "SHARED_DEVICE_ARENAS";
+    case EXCLUSIVE_ARENAS:
+      return "EXCLUSIVE_ARENAS";
     case EXCLUSIVE_DEVICE_ARENAS:
       return "EXCLUSIVE_DEVICE_ARENAS";
     case SHARED_SITE_ARENAS:
       return "SHARED_SITE_ARENAS";
-    case EXCLUSIVE_SITE_ARENAS:
-      return "EXCLUSIVE_SITE_ARENAS";
-    case EXCLUSIVE_TWO_DEVICE_ARENAS:
-      return "EXCLUSIVE_TWO_DEVICE_ARENAS";
-    case EXCLUSIVE_FOUR_DEVICE_ARENAS:
-      return "EXCLUSIVE_FOUR_DEVICE_ARENAS";
     case BIG_SMALL_ARENAS:
       return "BIG_SMALL_ARENAS";
     default:
@@ -109,6 +89,15 @@ void set_options() {
   FILE *guidance_file;
   ssize_t len;
   struct bitmask *cpus, *nodes;
+  char flag;
+  
+  profopts.profile_type_flags = 0;
+  
+  env = getenv("SH_FREE_BUFFER");
+  profopts.free_buffer = 0;
+  if(env) {
+    profopts.free_buffer = 1;
+  }
 
   /* See if there's profiling information that we can use later */
   env = getenv("SH_PROFILE_INPUT_FILE");
@@ -189,27 +178,17 @@ void set_options() {
   }
 
   /* Should we generate and attempt to use per-interval profiling information? */
-  env = getenv("SH_PROFILE_INTERVALS");
-  profopts.profile_intervals = 0;
+  env = getenv("SH_PRINT_PROFILE_INTERVALS");
+  profopts.print_profile_intervals = 0;
   if(env) {
-    profopts.profile_intervals = 1;
-  }
-
-  /* Should we split each type of profiling into its own thread? */
-  env = getenv("SH_PROFILE_SEPARATE_THREADS");
-  profopts.should_profile_separate_threads = 0;
-  if(env) {
-    profopts.should_profile_separate_threads = 1;
+    profopts.print_profile_intervals = 1;
   }
 
   /* Do we want to use the online approach, moving arenas around devices automatically? */
   env = getenv("SH_PROFILE_ONLINE");
-  profopts.should_profile_online = 0;
   profopts.profile_online_skip_intervals = 0;
-  profopts.profile_online_events = NULL;
-  profopts.num_profile_online_events = 0;
   if(env) {
-    profopts.should_profile_online = 1;
+    enable_profile_online();
 
     env = getenv("SH_PROFILE_ONLINE_DEBUG_FILE");
     profopts.profile_online_debug_file = NULL;
@@ -220,20 +199,13 @@ void set_options() {
         exit(1);
       }
     }
-
-    env = getenv("SH_PROFILE_ONLINE_WEIGHTS");
-    profopts.profile_online_weights = NULL;
-    profopts.num_profile_online_weights = 0;
+    
+    env = getenv("SH_PROFILE_ONLINE_RESERVED_BYTES");
+    profopts.profile_online_reserved_bytes = 0;
     if(env) {
-      /* Parse out the events into an array */
-      while((str = strtok(env, ",")) != NULL) {
-        profopts.num_profile_online_weights++;
-        profopts.profile_online_weights = orig_realloc(profopts.profile_online_weights, sizeof(float) * profopts.num_profile_online_weights);
-        profopts.profile_online_weights[profopts.num_profile_online_weights - 1] = strtof(str, NULL);
-        env = NULL;
-      }
+      profopts.profile_online_reserved_bytes = strtoul(env, NULL, 0);
     }
-
+    
     /* Grace period at the beginning of a run. Until this number of profiling accesses is reached,
        the profile_online won't rebind any sites. */
     env = getenv("SH_PROFILE_ONLINE_GRACE_ACCESSES");
@@ -254,25 +226,31 @@ void set_options() {
     if(env) {
       profopts.profile_online_skip_intervals = strtoul(env, NULL, 0);
     }
-
-    env = getenv("SH_PROFILE_ONLINE_EVENTS");
-    profopts.num_profile_online_events = 0;
-    profopts.profile_online_events = NULL;
+    
+    env = getenv("SH_PROFILE_ONLINE_VALUE");
     if(env) {
-      /* Parse out the events into an array */
-      while((str = strtok(env, ",")) != NULL) {
-        profopts.num_profile_online_events++;
-        profopts.profile_online_events = orig_realloc(profopts.profile_online_events, sizeof(char *) * profopts.num_profile_online_events);
-        profopts.profile_online_events[profopts.num_profile_online_events - 1] = orig_malloc(sizeof(char) * (strlen(str) + 1));
-        strcpy(profopts.profile_online_events[profopts.num_profile_online_events - 1], str);
-        env = NULL;
-      }
+      profopts.profile_online_value = orig_malloc((strlen(env) + 1) * sizeof(char));
+      strcpy(profopts.profile_online_value, env);
     }
-    if(profopts.num_profile_online_events == 0) {
-      fprintf(stderr, "No online events given. Can't proceed. Aborting.\n");
-      exit(1);
+    
+    env = getenv("SH_PROFILE_ONLINE_WEIGHT");
+    if(env) {
+      profopts.profile_online_weight = orig_malloc((strlen(env) + 1) * sizeof(char));
+      strcpy(profopts.profile_online_weight, env);
     }
 
+    env = getenv("SH_PROFILE_ONLINE_SORT");
+    if(env) {
+      profopts.profile_online_sort = orig_malloc((strlen(env) + 1) * sizeof(char));
+      strcpy(profopts.profile_online_sort, env);
+    }
+    
+    env = getenv("SH_PROFILE_ONLINE_PACKING_ALGO");
+    if(env) {
+      profopts.profile_online_packing_algo = orig_malloc((strlen(env) + 1) * sizeof(char));
+      strcpy(profopts.profile_online_packing_algo, env);
+    }
+    
     env = getenv("SH_PROFILE_ONLINE_USE_LAST_INTERVAL");
     profopts.profile_online_use_last_interval = 0;
     if(env) {
@@ -320,20 +298,8 @@ void set_options() {
     }
   }
   if(tracker.log_file) {
-    fprintf(tracker.log_file, "SH_PROFILE_ONLINE: %d\n", profopts.should_profile_online);
+    fprintf(tracker.log_file, "SH_PROFILE_ONLINE: %d\n", should_profile_online());
     fprintf(tracker.log_file, "SH_PROFILE_ONLINE_SKIP_INTERVALS: %d\n", profopts.profile_online_skip_intervals);
-    if(profopts.num_profile_online_events) {
-      for(i = 0; i < profopts.num_profile_online_events; i++) {
-        fprintf(tracker.log_file, "SH_PROFILE_ONLINE_EVENT: %s\n", profopts.profile_online_events[i]);
-      }
-    }
-    if(profopts.num_profile_online_weights) {
-      fprintf(tracker.log_file, "SH_PROFILE_ONLINE_WEIGHTS: ");
-      for(i = 0; i < profopts.num_profile_online_weights; i++) {
-        fprintf(tracker.log_file, "%f ", profopts.profile_online_weights[i]);
-      }
-      fprintf(tracker.log_file, "\n");
-    }
     fprintf(tracker.log_file, "SH_PROFILE_ONLINE_USE_LAST_INTERVAL: %d\n", profopts.profile_online_use_last_interval);
     fprintf(tracker.log_file, "SH_PROFILE_ONLINE_GRACE_ACCESSES: %lu\n", profopts.profile_online_grace_accesses);
   }
@@ -377,10 +343,11 @@ void set_options() {
   }
 
   /* Get max_arenas.
-   * Keep in mind that 4096 is the maximum number supported by jemalloc.
+   * Keep in mind that 4095 is the maximum number supported by jemalloc
+   * (12 bits to store the arena IDs, minus one).
    * An error occurs if this limit is reached.
    */
-  tracker.max_arenas = 4096;
+  tracker.max_arenas = 4095;
   env = getenv("SH_MAX_ARENAS");
   if(env) {
     tmp_val = strtoimax(env, NULL, 10);
@@ -412,6 +379,25 @@ void set_options() {
   if(tracker.log_file) {
     fprintf(tracker.log_file, "SH_MAX_SITES_PER_ARENA: %d\n", tracker.max_sites_per_arena);
   }
+  
+  /* Get max_sites.
+     This is the maximum number of allocation sites that you can have. Keep in mind
+     that we use site IDs as indices into an array, so the maximum site ID that you can
+     have is `tracker.max_sites - 1`. */
+  tracker.max_sites = 4096;
+  env = getenv("SH_MAX_SITES");
+  if(env) {
+    tmp_val = strtoimax(env, NULL, 10);
+    if((tmp_val == 0) || (tmp_val > INT_MAX)) {
+      fprintf(stderr, "Invalid arena number given. Aborting.\n");
+      exit(1);
+    } else {
+      tracker.max_sites = (int) tmp_val;
+    }
+  }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_MAX_SITES: %d\n", tracker.max_sites);
+  }
 
   /* Controls the profiling rate of all profiling types */
   profopts.profile_rate_nseconds = 0;
@@ -423,58 +409,80 @@ void set_options() {
     fprintf(tracker.log_file, "SH_PROFILE_RATE_NSECONDS: %zu\n", profopts.profile_rate_nseconds);
   }
 
-  /* Should we profile all allocation sites using sampling-based profiling? */
-  env = getenv("SH_PROFILE_ALL");
-  profopts.should_profile_all = 0;
+  /* The user can specify a number of NUMA nodes to profile on. For profile_all,
+     all CPUs on the node(s) will be profiled. For profile_bw, one CPU from
+     each node will be chosen to record the bandwidth on the IMC. */
+  env = getenv("SH_PROFILE_NODES");
+  profopts.num_profile_all_cpus = 0;
+  profopts.num_profile_skt_cpus = 0;
+  profopts.profile_all_cpus = NULL;
+  profopts.profile_skt_cpus = NULL;
+  profopts.profile_skts = NULL;
   if(env) {
-    profopts.should_profile_all = 1;
-  }
-  if(profopts.should_profile_all) {
-
-    env = getenv("SH_PROFILE_ALL_NODES");
-    profopts.num_profile_all_cpus = 0;
-    profopts.profile_all_cpus = NULL;
-    //fprintf(tracker.log_file, "SH_PROFILE_ALL_NODES=%s\n", env);
-    //fflush(tracker.log_file);
-    if(env) {
-      /* First, get a list of nodes that the user specified */
-      nodes = numa_parse_nodestring(env);
-      cpus = numa_allocate_cpumask();
-      num_cpus = numa_num_configured_cpus();
-      num_nodes = numa_num_configured_nodes();
-      /* Iterate over the nodes in the `nodes` bitmask */
-      for(node = 0; node < num_nodes; node++) {
-        if(numa_bitmask_isbitset(nodes, node)) {
-          numa_bitmask_clearall(cpus);
-          numa_node_to_cpus(node, cpus);
-          /* Now iterate over the CPUs on those nodes */
-          for(cpu = 0; cpu < num_cpus; cpu++) {
-            if(numa_bitmask_isbitset(cpus, cpu)) {
-              /* Here, we're just adding a CPU number to the array. */
-              profopts.num_profile_all_cpus++;
-              profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
-              profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
-              //fprintf(tracker.log_file, "profile_all[%d] = %d\n", profopts.num_profile_all_cpus - 1, cpu);
-              //fflush(tracker.log_file);
+    /* First, get a list of nodes that the user specified */
+    nodes = numa_parse_nodestring(env);
+    cpus = numa_allocate_cpumask();
+    num_cpus = numa_num_configured_cpus();
+    num_nodes = numa_num_configured_nodes();
+    /* Iterate over the nodes in the `nodes` bitmask */
+    for(node = 0; node < num_nodes; node++) {
+      if(numa_bitmask_isbitset(nodes, node)) {
+        numa_bitmask_clearall(cpus);
+        numa_node_to_cpus(node, cpus);
+        flag = 0;
+        /* Now iterate over the CPUs on those nodes */
+        for(cpu = 0; cpu < num_cpus; cpu++) {
+          if(numa_bitmask_isbitset(cpus, cpu)) {
+            /* Here, we'll add one (1) CPU from this list to profile_skt_cpus */
+            if(!flag) {
+              profopts.num_profile_skt_cpus++;
+              profopts.profile_skt_cpus = orig_realloc(profopts.profile_skt_cpus,
+                                                      sizeof(int) * profopts.num_profile_skt_cpus);
+              profopts.profile_skts = orig_realloc(profopts.profile_skt_cpus,
+                                                       sizeof(int) * profopts.num_profile_skt_cpus);
+              profopts.profile_skt_cpus[profopts.num_profile_skt_cpus - 1] = cpu;
+              profopts.profile_skts[profopts.num_profile_skt_cpus - 1] = node;
+              flag = 1;
             }
+            /* ...and add all of the CPUs to profile_all */
+            profopts.num_profile_all_cpus++;
+            profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
+            profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
           }
         }
       }
-    } else {
-      /* If the user doesn't set this, default to using the CPUs on the NUMA nodes that this
-         process is allowed on */
-      cpus = numa_all_cpus_ptr;
-      num_cpus = numa_num_configured_cpus();
-      for(cpu = 0; cpu < num_cpus; cpu++) {
-        if(numa_bitmask_isbitset(cpus, cpu)) {
-          profopts.num_profile_all_cpus++;
-          profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
-          profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
-          //fprintf(tracker.log_file, "profile_all[%d] = %d\n", profopts.num_profile_all_cpus - 1, cpu);
-          //fflush(tracker.log_file);
+    }
+  } else {
+    /* If the user doesn't set this, default to using the CPUs on the NUMA nodes that this
+        process is allowed on */
+    cpus = numa_all_cpus_ptr;
+    num_cpus = numa_num_configured_cpus();
+    flag = 0;
+    for(cpu = 0; cpu < num_cpus; cpu++) {
+      if(numa_bitmask_isbitset(cpus, cpu)) {
+        if(!flag) {
+          profopts.num_profile_skt_cpus++;
+          profopts.profile_skt_cpus = orig_realloc(profopts.profile_skt_cpus,
+                                                  sizeof(int) * profopts.num_profile_skt_cpus);
+          profopts.profile_skts = orig_realloc(profopts.profile_skts,
+                                                  sizeof(int) * profopts.num_profile_skt_cpus);
+          profopts.profile_skt_cpus[profopts.num_profile_skt_cpus - 1] = cpu;
+          profopts.profile_skts[profopts.num_profile_skt_cpus - 1] = numa_node_of_cpu(cpu);
+          flag = 1;
         }
+        profopts.num_profile_all_cpus++;
+        profopts.profile_all_cpus = orig_realloc(profopts.profile_all_cpus, sizeof(int) * profopts.num_profile_all_cpus);
+        profopts.profile_all_cpus[profopts.num_profile_all_cpus - 1] = cpu;
       }
     }
+  }
+
+  /* Should we profile all allocation sites using sampling-based profiling? */
+  env = getenv("SH_PROFILE_ALL");
+  if(env) {
+    enable_profile_all();
+  }
+  if(should_profile_all()) {
 
     env = getenv("SH_PROFILE_ALL_EVENTS");
     profopts.num_profile_all_events = 0;
@@ -493,6 +501,23 @@ void set_options() {
       fprintf(stderr, "No profiling events given. Can't profile with sampling.\n");
       exit(1);
     }
+    
+    env = getenv("SH_PROFILE_ALL_MULTIPLIERS");
+    profopts.num_profile_all_multipliers = 0;
+    profopts.profile_all_multipliers = NULL;
+    if(env) {
+      /* Parse out the events into an array */
+      while((str = strtok(env, ",")) != NULL) {
+        profopts.num_profile_all_multipliers++;
+        profopts.profile_all_multipliers = orig_realloc(profopts.profile_all_multipliers, sizeof(float) * profopts.num_profile_all_multipliers);
+        profopts.profile_all_multipliers[profopts.num_profile_all_multipliers - 1] = strtof(str, NULL);
+        env = NULL;
+      }
+      if(profopts.num_profile_all_multipliers != profopts.num_profile_all_events) {
+        fprintf(stderr, "Number of multipliers doesn't equal the number of PROFILE_ALL events. Aborting.\n");
+        exit(1);
+      }
+    }
 
     env = getenv("SH_PROFILE_ALL_SKIP_INTERVALS");
     profopts.profile_all_skip_intervals = 1;
@@ -501,7 +526,7 @@ void set_options() {
     }
 
     if(tracker.log_file) {
-      fprintf(tracker.log_file, "SH_PROFILE_ALL: %d\n", profopts.should_profile_all);
+      fprintf(tracker.log_file, "SH_PROFILE_ALL: %d\n", should_profile_all());
       fprintf(tracker.log_file, "SH_PROFILE_ALL_SKIP_INTERVALS: %lu\n", profopts.profile_all_skip_intervals);
       fprintf(tracker.log_file, "NUM_PROFILE_ALL_EVENTS: %zu\n", profopts.num_profile_all_events);
       for(i = 0; i < profopts.num_profile_all_events; i++) {
@@ -562,12 +587,11 @@ void set_options() {
 
   /* Should we keep track of when each allocation happened, in intervals? */
   env = getenv("SH_PROFILE_ALLOCS");
-  profopts.should_profile_allocs = 0;
   if(env) {
-    profopts.should_profile_allocs = 1;
+    enable_profile_allocs();
   }
   if(tracker.log_file) {
-    fprintf(tracker.log_file, "SH_PROFILE_ALLOCS: %d\n", profopts.should_profile_allocs);
+    fprintf(tracker.log_file, "SH_PROFILE_ALLOCS: %d\n", should_profile_allocs());
   }
 
   /* Should we keep track of when each object and its site ID */
@@ -579,116 +603,150 @@ void set_options() {
   if(tracker.log_file) {
     fprintf(tracker.log_file, "SH_PROFILE_OBJECTS: %d\n", profopts.should_profile_objects);
   }
-
-  /* Should we profile (by isolating) a single allocation site onto a NUMA node
-   * and getting the memory bandwidth on that node?
-   */
-  env = getenv("SH_PROFILE_ONE");
-  profopts.should_profile_one = 0;
+ 
+  /* The user should specify a comma-delimited list of IMCs to read the
+    * bandwidth from. This will be passed to libpfm. For example, on an Ivy
+    * Bridge server, this value is e.g. `ivbep_unc_imc0`, and on KNL it's
+    * `knl_unc_imc0`. These are per-socket IMCs, so they will be used on all
+    * sockets that you choose to profile on.
+    */
+  env = getenv("SH_PROFILE_IMC");
+  profopts.num_imcs = 0;
+  profopts.imcs = NULL;
   if(env) {
-    profopts.should_profile_one = 1;
+    /* Parse out the IMCs into an array */
+    while((str = strtok(env, ",")) != NULL) {
+      profopts.num_imcs++;
+      profopts.imcs = orig_realloc(profopts.imcs, sizeof(char *) * profopts.num_imcs);
+      profopts.imcs[profopts.num_imcs - 1] = str;
+      env = NULL;
+    }
   }
-  if(tracker.log_file) {
-    fprintf(tracker.log_file, "SH_PROFILE_ONE: %d\n", profopts.should_profile_one);
-  }
-
-  if(profopts.should_profile_one) {
-
-    if(profopts.should_profile_all) {
-      fprintf(stderr, "Cannot enable both profile_all and profile_one. Choose one.\n");
-      exit(1);
-    }
-
-    /* Which site are we profiling? */
-    env = getenv("SH_PROFILE_ONE_SITE");
-    profopts.profile_one_site = -1;
-    if(env) {
-      tmp_val = strtoimax(env, NULL, 10);
-      if((tmp_val == 0) || (tmp_val > INT_MAX)) {
-        fprintf(stderr, "Invalid allocation site ID given: %d.\n", tmp_val);
-        exit(1);
-      } else {
-        profopts.profile_one_site = (int) tmp_val;
-      }
-    }
-
-    /* If the above is true, which NUMA node should we isolate the allocation site
-     * onto? The user should also set SH_DEFAULT_DEVICES to another device to avoid
-     * the two being the same, if the allocation site is to be isolated.
-     */
-    env = getenv("SH_PROFILE_ONE_NODE");
-    if(env) {
-      tmp_val = strtoimax(env, NULL, 10);
-      profopts.profile_one_device = get_device_from_numa_node((int) tmp_val);
-    }
-
-    /* The user can also specify a comma-delimited list of IMCs to read the
-     * bandwidth from. This will be passed to libpfm. For example, on an Ivy
-     * Bridge server, this value is e.g. `ivbep_unc_imc0`, and on KNL it's
-     * `knl_unc_imc0`.
-     */
-    env = getenv("SH_PROFILE_ONE_IMC");
-    profopts.num_imcs = 0;
-    profopts.max_imc_len = 0;
-    profopts.imcs = NULL;
-    if(env) {
-      /* Parse out the IMCs into an array */
-      while((str = strtok(env, ",")) != NULL) {
-        profopts.num_imcs++;
-        profopts.imcs = orig_realloc(profopts.imcs, sizeof(char *) * profopts.num_imcs);
-        profopts.imcs[profopts.num_imcs - 1] = str;
-        if(strlen(str) > profopts.max_imc_len) {
-          profopts.max_imc_len = strlen(str);
-        }
-        env = NULL;
-      }
-    }
+  
+  /* Should we profile bandwidth on a specific socket? */
+  env = getenv("SH_PROFILE_BW");
+  profopts.profile_bw_skip_intervals = 0;
+  if(env) {
+    enable_profile_bw();
+    
     if(profopts.num_imcs == 0) {
-      fprintf(stderr, "No IMCs given. Can't profile one arena.\n");
+      fprintf(stderr, "No IMCs given. Can't enable profile_bw.\n");
       exit(1);
     }
 
-    /* What events should be used to measure the bandwidth?
+    env = getenv("SH_PROFILE_BW_SKIP_INTERVALS");
+    profopts.profile_bw_skip_intervals = 1;
+    if(env) {
+      profopts.profile_bw_skip_intervals = strtoul(env, NULL, 0);
+    }
+    
+    /* The user should specify a number of CPUs to use to read
+       the bandwidth from the IMCs. In the case of many machines,
+       this usually means that the user should select one CPU per socket. */
+    
+    /*
+    What events should be used to measure the bandwidth?
      */
-    env = getenv("SH_PROFILE_ONE_EVENTS");
-    profopts.num_profile_one_events = 0;
-    char **tmp_profile_one_events = NULL;
+    env = getenv("SH_PROFILE_BW_EVENTS");
+    profopts.num_profile_bw_events = 0;
+    profopts.profile_bw_events = NULL;
     if(env) {
       /* Parse out the events into an array */
       while((str = strtok(env, ",")) != NULL) {
-        profopts.num_profile_one_events++;
-        tmp_profile_one_events = orig_realloc(tmp_profile_one_events, sizeof(char *) * profopts.num_profile_one_events);
-        tmp_profile_one_events[profopts.num_profile_one_events - 1] = str;
+        profopts.num_profile_bw_events++;
+        profopts.profile_bw_events = orig_realloc(profopts.profile_bw_events, sizeof(char *) * profopts.num_profile_bw_events);
+        profopts.profile_bw_events[profopts.num_profile_bw_events - 1] = malloc(sizeof(char) * (strlen(str) + 1));
+        strcpy(profopts.profile_bw_events[profopts.num_profile_bw_events - 1], str);
         env = NULL;
       }
     }
-    if(profopts.num_profile_one_events == 0) {
+    if(profopts.num_profile_bw_events == 0) {
       fprintf(stderr, "No profiling events given. Can't profile one arena.\n");
       exit(1);
     }
-
-    /* Prepend each IMC name to each event string, because that's what libpfm4 expects */
-    size_t index;
-    profopts.profile_one_events = orig_calloc(profopts.num_profile_one_events * profopts.num_imcs, sizeof(char *));
-    for(i = 0; i < profopts.num_profile_one_events; i++) {
-      for(n = 0; n < profopts.num_imcs; n++) {
-        index = (i * profopts.num_imcs) + n;
-        /* Allocate enough room for the IMC name, the event name, two colons, and a terminator. */
-        profopts.profile_one_events[index] = orig_malloc(sizeof(char) *
-                                    (strlen(tmp_profile_one_events[i]) + strlen(profopts.imcs[n]) + 3));
-        sprintf(profopts.profile_one_events[index], "%s::%s", profopts.imcs[n], tmp_profile_one_events[i]);
-      }
+    
+    /* Should we try to associate bandwidth with arenas, using their
+       relative profile_all values? */
+    env = getenv("SH_PROFILE_BW_RELATIVE");
+    profopts.profile_bw_relative = 0;
+    if(env) {
+      profopts.profile_bw_relative = 1;
+    }
+  }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_PROFILE_BW: %d\n", should_profile_bw());
+  }
+  
+  /* Should we profile latency on a specific socket? */
+  env = getenv("SH_PROFILE_LATENCY");
+  profopts.profile_latency_skip_intervals = 0;
+  if(env) {
+    enable_profile_latency();
+    
+    if(profopts.num_imcs == 0) {
+      fprintf(stderr, "No IMCs given. Can't enable profile_latency.\n");
+      exit(1);
+    }
+    
+    env = getenv("SH_PROFILE_LATENCY_SET_MULTIPLIERS");
+    profopts.profile_latency_set_multipliers = 0;
+    if(env) {
+      profopts.profile_latency_set_multipliers = 1;
     }
 
-    profopts.num_profile_one_events *= profopts.num_imcs;
+    env = getenv("SH_PROFILE_LATENCY_SKIP_INTERVALS");
+    profopts.profile_latency_skip_intervals = 1;
+    if(env) {
+      profopts.profile_latency_skip_intervals = strtoul(env, NULL, 0);
+    }
+    
+    /*
+      What events should be used to measure the latency?
+    */
+    env = getenv("SH_PROFILE_LATENCY_EVENTS");
+    profopts.num_profile_latency_events = 0;
+    profopts.profile_latency_events = NULL;
+    if(env) {
+      /* Parse out the events into an array */
+      while((str = strtok(env, ",")) != NULL) {
+        profopts.num_profile_latency_events++;
+        profopts.profile_latency_events = orig_realloc(profopts.profile_latency_events, sizeof(char *) * profopts.num_profile_latency_events);
+        profopts.profile_latency_events[profopts.num_profile_latency_events - 1] = malloc(sizeof(char) * (strlen(str) + 1));
+        strcpy(profopts.profile_latency_events[profopts.num_profile_latency_events - 1], str);
+        env = NULL;
+      }
+      if(profopts.num_profile_latency_events != 8) {
+        fprintf(stderr, "Currently, the profile_latency profiler hardcodes a metric composed of exactly eight (read and write) events.\n");
+        fprintf(stderr, "The first four should be for the upper tier, and the last four should be for the lower tier.\n");
+        fprintf(stderr, "Aborting.\n");
+        exit(1);
+      }
+    }
+    if(profopts.num_profile_latency_events == 0) {
+      fprintf(stderr, "No profiling events given. Can't profile latency.\n");
+      exit(1);
+    }
+    
+    /*
+      We'll need an event to measure the DRAM clockticks
+    */
+    env = getenv("SH_PROFILE_LATENCY_CLOCKTICK_EVENT");
+    profopts.profile_latency_clocktick_event = NULL;
+    if(env) {
+      profopts.profile_latency_clocktick_event = malloc(sizeof(char) * (strlen(env) + 1));
+      strcpy(profopts.profile_latency_clocktick_event, env);
+    }
+    if(profopts.profile_latency_clocktick_event == NULL) {
+      fprintf(stderr, "Need an event to get clockticks from the DRAM. Can't profile latency. Aborting.\n");
+      exit(1);
+    }
   }
 
   /* Should we get the RSS of each arena? */
   env = getenv("SH_PROFILE_RSS");
-  profopts.should_profile_rss = 0;
   profopts.profile_rss_skip_intervals = 0;
   if(env) {
-    profopts.should_profile_rss = 1;
+    enable_profile_rss();
 
     env = getenv("SH_PROFILE_RSS_SKIP_INTERVALS");
     profopts.profile_rss_skip_intervals = 1;
@@ -702,9 +760,8 @@ void set_options() {
   }
 
   env = getenv("SH_PROFILE_EXTENT_SIZE");
-  profopts.should_profile_extent_size = 0;
   if(env) {
-    profopts.should_profile_extent_size = 1;
+    enable_profile_extent_size();
 
     env = getenv("SH_PROFILE_EXTENT_SIZE_SKIP_INTERVALS");
     profopts.profile_extent_size_skip_intervals = 1;
@@ -714,9 +771,8 @@ void set_options() {
   }
 
   env = getenv("SH_PROFILE_ALLOCS");
-  profopts.should_profile_allocs = 0;
   if(env) {
-    profopts.should_profile_allocs = 1;
+    enable_profile_allocs();
 
     env = getenv("SH_PROFILE_ALLOCS_SKIP_INTERVALS");
     profopts.profile_allocs_skip_intervals = 1;
@@ -767,7 +823,7 @@ void set_options() {
   if(env) {
     tmp_val = strtoimax(env, NULL, 10);
     /* Value needs to be non-negative, less than or equal to 512, and a power of 2. */
-    if((tmp_val <= 0) || (tmp_val > 512) || (tmp_val & (tmp_val - 1))) {
+    if((tmp_val <= 0) || (tmp_val > 2048) || (tmp_val & (tmp_val - 1))) {
       fprintf(stderr, "Invalid number of pages given. Aborting.\n");
       exit(1);
     } else {
@@ -828,24 +884,13 @@ void set_options() {
 
   /* Get arenas_per_thread */
   switch(tracker.layout) {
-    case SHARED_ONE_ARENA:
-    case EXCLUSIVE_ONE_ARENA:
+    case EXCLUSIVE_ARENAS:
       tracker.arenas_per_thread = 1;
       break;
-    case SHARED_DEVICE_ARENAS:
     case EXCLUSIVE_DEVICE_ARENAS:
-      tracker.arenas_per_thread = tracker.num_numa_nodes; //(int) device_list.count;
+      tracker.arenas_per_thread = 2;
       break;
     case SHARED_SITE_ARENAS:
-    case EXCLUSIVE_SITE_ARENAS:
-      tracker.arenas_per_thread = tracker.max_arenas;
-      break;
-    case EXCLUSIVE_TWO_DEVICE_ARENAS:
-      tracker.arenas_per_thread = 2 * tracker.num_numa_nodes; //((int) device_list.count);
-      break;
-    case EXCLUSIVE_FOUR_DEVICE_ARENAS:
-      tracker.arenas_per_thread = 4 * tracker.num_numa_nodes; //((int) device_list.count);
-      break;
     case BIG_SMALL_ARENAS:
       tracker.arenas_per_thread = 1;
     default:
@@ -894,14 +939,9 @@ void set_options() {
         }
         sscanf(str, "%d", &node);
 
-        /* Construct a site_info struct to store in the tree */
-        site_info *site_struct = orig_malloc(sizeof(site_info));
-        pthread_rwlock_init(&site_struct->lock, NULL);
-        site_struct->device = get_device_from_numa_node(node);
-        site_struct->arena = -1;
-        site_struct->size = 0;
-        site_struct->big = 0;
-        tree_insert(tracker.sites, site, site_struct);
+        /* Use the arrays of atomics to set this site to go to the proper device */
+        tracker.site_devices[site] = (atomic_intptr_t) get_device_from_numa_node(node);
+        
       } else {
         if(!str) continue;
         /* Find the "===== GUIDANCE" tokens */
@@ -941,6 +981,12 @@ void set_options() {
     }
     profopts.should_run_rdspy = 1 && tracker.num_static_sites;
   }
+  
+  printf("profile_type_flags = %u\n", profopts.profile_type_flags);
+  if(should_profile_online()) {
+    printf("I should profile online.\n");
+  }
+  fflush(stdout);
 }
 
 __attribute__((constructor))
@@ -974,9 +1020,7 @@ void sh_init() {
   /* Initialize all of the locks */
   pthread_rwlock_init(&tracker.extents_lock, NULL);
   pthread_mutex_init(&tracker.arena_lock, NULL);
-  pthread_mutex_init(&tracker.thread_lock, NULL);
   pthread_rwlock_init(&tracker.device_arenas_lock, NULL);
-  pthread_rwlock_init(&tracker.sites_lock, NULL);
 
   /* Get the number of NUMA nodes with memory, since we ignore huge pages with
    * the DEVICE arena layouts */
@@ -989,49 +1033,45 @@ void sh_init() {
   }
 
   tracker.arena_counter = 0;
-  tracker.sites = tree_make(int, siteinfo_ptr);
-  tracker.device_arenas = tree_make(deviceptr, int);
   set_options();
 
   if(tracker.layout != INVALID_LAYOUT) {
     tracker.arenas = (arena_info **) orig_calloc(tracker.max_arenas, sizeof(arena_info *));
+    
+    /* These atomics keep track of per-site information, such as:
+       1. `site_bigs`: boolean for if the site is above big_small_threshold or not.
+       2. `site_sizes`: the number of bytes allocated to this site.
+       3. `site_devices`: a pointer to the device that this site should be bound to.
+       4. `site_arenas`: an integer index of the arena this site gets allocated to.
+    */
+    tracker.site_bigs = (atomic_char *) orig_calloc(tracker.max_sites, sizeof(atomic_char));
+    tracker.site_sizes = (atomic_size_t *) orig_calloc(tracker.max_sites, sizeof(atomic_size_t));
+    tracker.site_devices = (atomic_intptr_t *) orig_malloc(tracker.max_sites * sizeof(atomic_intptr_t));
+    for(i = 0; i < tracker.max_sites; i++) {
+      tracker.site_devices[i] = (atomic_intptr_t) NULL;
+    }
+    tracker.site_arenas = (atomic_int *) orig_malloc(tracker.max_sites * sizeof(atomic_int));
+    for(i = 0; i < tracker.max_sites; i++) {
+      tracker.site_arenas[i] = -1;
+    }
 
     /* Initialize the extents array.
      */
     tracker.extents = extent_arr_init();
-
-    /* Stores the index into the `arenas` array for each thread */
-    pthread_key_create(&tracker.thread_key, NULL);
-    tracker.thread_indices = (int *) orig_malloc(tracker.max_threads * sizeof(int));
-    tracker.orig_thread_indices = tracker.thread_indices;
-    tracker.max_thread_indices = tracker.orig_thread_indices + tracker.max_threads;
-    for(i = 0; i < tracker.max_threads; i++) {
-      tracker.thread_indices[i] = i;
-    }
-    pthread_setspecific(tracker.thread_key, (void *) tracker.thread_indices);
-    tracker.thread_indices++;
-
-    /* Stores an index into `arenas` for the extent hooks */
-    tracker.pending_indices = (int *) orig_malloc(tracker.max_threads * sizeof(int));
-    for(i = 0; i < tracker.max_threads; i++) {
-      tracker.pending_indices[i] = -1;
+    
+    /* This is just an atomic counter that we use to grab a new
+       index for every thread that allocates for the first time */
+    tracker.current_thread_index = 0;
+    
+    if(should_profile_all() ||
+       should_profile_rss() ||
+       should_profile_extent_size()) {
+      /* Set the arena allocator's callback function */
+      sicm_extent_alloc_callback = &sh_create_extent;
+      sicm_extent_dalloc_callback = &sh_delete_extent;
     }
 
-    /* Set the arena allocator's callback function */
-    sicm_extent_alloc_callback = &sh_create_extent;
-    sicm_extent_dalloc_callback = &sh_delete_extent;
-
-    profopts.should_profile = 0;
-    if(profopts.should_profile_all ||
-       profopts.should_profile_rss ||
-       profopts.should_profile_extent_size ||
-       profopts.should_profile_online ||
-       profopts.should_profile_allocs ||
-       profopts.should_profile_one) {
-      profopts.should_profile = 1;
-    }
-
-    if(profopts.should_profile) {
+    if(should_profile()) {
       sh_start_profile_master_thread();
     }
   }
@@ -1042,7 +1082,7 @@ void sh_init() {
 
   if(tracker.log_file) {
     fprintf(tracker.log_file, "===== END OPTIONS =====\n");
-    fclose(tracker.log_file);
+    //fclose(tracker.log_file);
   }
 
   sh_initialized = 1;
@@ -1062,6 +1102,10 @@ void sh_terminate() {
     return;
   }
   sh_initialized = 0;
+  
+  if(tracker.log_file) {
+    fclose(tracker.log_file);
+  }
 
   /* Disable the background thread in jemalloc to avoid a segfault */
   on = false;
@@ -1074,7 +1118,7 @@ void sh_terminate() {
   if(tracker.layout != INVALID_LAYOUT) {
 
     /* Clean up the profiler */
-    if(profopts.should_profile) {
+    if(should_profile()) {
       sh_stop_profile_master_thread();
     }
 
@@ -1086,9 +1130,6 @@ void sh_terminate() {
       orig_free(tracker.arenas[i]);
     }
     orig_free(tracker.arenas);
-
-    orig_free(tracker.pending_indices);
-    orig_free(tracker.orig_thread_indices);
     extent_arr_free(tracker.extents);
   }
 

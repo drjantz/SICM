@@ -25,7 +25,7 @@ void update_page_rec(addr_t, size_t, int, int*);
 void update_cache_block_rec(addr_t, size_t, int, int*);
 
 /* Uses libpfm to figure out the event we're going to use */
-void sh_get_event() {
+void sh_get_profile_all_event() {
   int err;
   size_t i, n;
   pfm_perf_encode_arg_t pfm;
@@ -48,7 +48,7 @@ void sh_get_event() {
       }
 
       /* If we're profiling all, set some additional options. */
-      if(profopts.should_profile_all) {
+      if(should_profile_all()) {
         prof.profile_all.pes[n][i]->sample_type = PERF_SAMPLE_TID | PERF_SAMPLE_ADDR;
         prof.profile_all.pes[n][i]->sample_period = profopts.sample_freq;
         prof.profile_all.pes[n][i]->mmap = 1;
@@ -128,7 +128,7 @@ void profile_all_init() {
   }
 
   /* Use libpfm to fill the pe struct */
-  sh_get_event();
+  sh_get_profile_all_event();
 
   /* Open all perf file descriptors */
   for(n = 0; n < profopts.num_profile_all_cpus; n++) {
@@ -179,8 +179,6 @@ void profile_all_init() {
 }
 
 void *profile_all(void *a) {
-  size_t i;
-
   pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
   /* Wait for signals */
@@ -189,7 +187,6 @@ void *profile_all(void *a) {
 
 /* Just copies the previous value */
 void profile_all_skip_interval(int s) {
-  end_interval();
 }
 
 /* Adds up accesses to the arenas */
@@ -234,7 +231,6 @@ void profile_all_interval(int s) {
       if(err == 0) {
         /* Finished with this interval, there are no ready perf buffers to
          * read from */
-        end_interval();
         return;
       } else if(err == -1) {
         fprintf(stderr, "Error occurred polling. Aborting.\n");
@@ -435,8 +431,16 @@ void profile_all_interval(int s) {
       __sync_synchronize();
     }
   }
-
-  end_interval();
+  
+  for(i = 0; i < prof.profile->num_profile_all_events; i++) {
+    arena_arr_for(n) {
+      prof_check_good(arena, aprof, n);
+      if(profopts.profile_all_multipliers) {
+        aprof->profile_all.events[i].current *= profopts.profile_all_multipliers[i];
+      }
+      aprof->profile_all.events[i].total += aprof->profile_all.events[i].current;
+    }
+  }
 }
 
 void profile_all_post_interval(arena_profile *aprof) {

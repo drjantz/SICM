@@ -18,7 +18,18 @@
 #include "sicm_profile_online_orig.h"
 #include "sicm_profile_online_ski.h"
 
-void profile_online_arena_init(profile_online_info *);
+/* Helper functions called by the application, for debugging purposes. */
+#include "sicm_helpers.h"
+
+void sh_profile_online_phase_change() {
+  if(should_profile_online()) {
+    profile_online_info *online;
+    online = get_profile_online_prof();
+    online->phase_change = 1;
+  }
+}
+
+void profile_online_arena_init(per_arena_profile_online_info *);
 void profile_online_deinit();
 void profile_online_init();
 void *profile_online(void *);
@@ -29,7 +40,6 @@ void profile_online_post_interval(arena_profile *);
 /* At the beginning of an interval, keeps track of stats and figures out what
    should happen during rebind. */
 tree(site_info_ptr, int) prepare_stats() {
-  size_t upper_avail, lower_avail;
 
   /* Trees and iterators to interface with the parsing/packing libraries */
   tree(site_info_ptr, int) sorted_sites;
@@ -39,20 +49,22 @@ tree(site_info_ptr, int) prepare_stats() {
   tree_it(site_info_ptr, int) sit;
 
   /* Look at how much the application has consumed on each tier */
-  upper_avail = sicm_avail(tracker.upper_device) * 1024;
-  lower_avail = sicm_avail(tracker.lower_device) * 1024;
+  prof.profile_online.upper_avail = sicm_avail(tracker.upper_device) * 1024;
+  prof.profile_online.lower_avail = sicm_avail(tracker.lower_device) * 1024;
 
-  if((lower_avail < prof.profile->lower_capacity) && (!prof.profile_online.upper_contention)) {
+  if((prof.profile_online.lower_avail < prof.profile->lower_capacity) && (!prof.profile_online.upper_contention)) {
     /* If the lower tier is being used, we're going to assume that the
        upper tier is under contention. Trip a flag and let the online
        approach take over. Begin defaulting all new allocations to the lower
        tier. */
     prof.profile_online.upper_contention = 1;
     tracker.default_device = tracker.lower_device;
+    sorted_sites = sh_convert_to_site_tree(prof.profile, SIZE_MAX);
+    full_rebind_cold(sorted_sites);
   }
 
   /* Convert to a tree of sites */
-  sorted_sites = sh_convert_to_site_tree(prof.profile, 0);
+  sorted_sites = sh_convert_to_site_tree(prof.profile, SIZE_MAX);
 
   /* If we've got offline profiling, use it */
   if(prof.profile_online.offline_sorted_sites) {
@@ -68,7 +80,7 @@ tree(site_info_ptr, int) prepare_stats() {
   /* Calculate the hotset, then mark each arena's hotness
      in the profiling so that it'll be recorded for this interval */
   hotset = sh_get_hot_sites(merged_sorted_sites,
-                            prof.profile->upper_capacity);
+                            prof.profile->upper_capacity - profopts.profile_online_reserved_bytes);
   tree_traverse(merged_sorted_sites, sit) {
     hit = tree_lookup(hotset, tree_it_val(sit));
     if(tree_it_good(hit)) {
@@ -92,7 +104,7 @@ tree(site_info_ptr, int) prepare_stats() {
 }
 
 /* Initializes the profiling information for one arena for one interval */
-void profile_online_arena_init(profile_online_info *info) {
+void profile_online_arena_init(per_arena_profile_online_info *info) {
   info->dev = -1;
   info->hot = -1;
   info->num_hot_intervals = 0;
@@ -126,88 +138,43 @@ void profile_online_interval(int s) {
     }
   }
   tree_free(sorted_sites);
-
-  end_interval();
 }
 
 void profile_online_init() {
   size_t i, n;
   char found;
-  char *weight;
-  char *value;
-  char *algo;
-  char *sort;
   application_profile *offline_profile;
-
-  /* Determine which type of profiling to use to determine weight. Error if none found. */
-  if(profopts.should_profile_allocs) {
-    weight = malloc((strlen("profile_allocs") + 1) * sizeof(char));
-    strcpy(weight, "profile_allocs");
-  } else if(profopts.should_profile_extent_size) {
-    weight = malloc((strlen("profile_extent_size") + 1) * sizeof(char));
-    strcpy(weight, "profile_extent_size");
-  } else if(profopts.should_profile_rss) {
-    weight = malloc((strlen("profile_rss") + 1) * sizeof(char));
-    strcpy(weight, "profile_rss");
-  } else {
-    fprintf(stderr, "The online approach requires some kind of capacity profiling. Aborting.\n");
-    exit(1);
+  packing_options *opts;
+  
+  opts = orig_calloc(sizeof(char), sizeof(packing_options));
+  
+  /* Let the user choose these, but sh_packing_init will set defaults if not */
+  if(profopts.profile_online_value) {
+    opts->value = sh_packing_value_flag(profopts.profile_online_value);
   }
-
-  /* Look for the event that we're supposed to use for value. Error out if it's not found. */
-  if(!profopts.should_profile_all) {
-    fprintf(stderr, "SH_PROFILE_ONLINE requires SH_PROFILE_ALL. Aborting.\n");
-    exit(1);
+  if(profopts.profile_online_weight) {
+    opts->weight = sh_packing_weight_flag(profopts.profile_online_weight);
   }
-  value = malloc((strlen("profile_all") + 1) * sizeof(char));
-  strcpy(value, "profile_all");
-
-  /* Find the event string and make sure that the event is available. */
-  found = 0;
-  for(i = 0; i < profopts.num_profile_online_events; i++) {
-    for(n = 0; n < prof.profile->num_profile_all_events; n++) {
-      if(strcmp(prof.profile->profile_all_events[n], profopts.profile_online_events[i]) == 0) {
-        found++;
-        break;
-      }
-    }
+  if(profopts.profile_online_packing_algo) {
+    opts->algo = sh_packing_algo_flag(profopts.profile_online_packing_algo);
   }
-  if(found != profopts.num_profile_online_events) {
-    fprintf(stderr, "At least one of the events in SH_PROFILE_ONLINE_EVENTS wasn't found in SH_PROFILE_ALL_EVENTS. Aborting.\n");
-    exit(1);
+  if(profopts.profile_online_sort) {
+    opts->sort = sh_packing_sort_flag(profopts.profile_online_sort);
   }
-
-  algo = orig_malloc((strlen("hotset") + 1) * sizeof(char));
-  strcpy(algo, "hotset");
-  sort = orig_malloc((strlen("value_per_weight") + 1) * sizeof(char));
-  strcpy(sort, "value_per_weight");
-
+  if(profopts.profile_online_debug_file) {
+    opts->debug_file = profopts.profile_online_debug_file;
+  }
+  
   /* The previous and current profiling *need* to have the same type of profiling for this
      to make sense. Otherwise, you're just going to get errors. */
   offline_profile = NULL;
   prof.profile_online.offline_sorted_sites = NULL;
   if(profopts.profile_input_file) {
     offline_profile = sh_parse_profiling(profopts.profile_input_file);
-    sh_packing_init(offline_profile,
-                    &value,
-                    &profopts.profile_online_events,
-                    &profopts.num_profile_online_events,
-                    &weight,
-                    &algo,
-                    &sort,
-                    profopts.profile_online_weights,
-                    0);
+    sh_packing_init(offline_profile, &opts);
     prof.profile_online.offline_sorted_sites = sh_convert_to_site_tree(offline_profile, offline_profile->num_intervals - 1);
   } else {
-    sh_packing_init(prof.profile,
-                    &value,
-                    &profopts.profile_online_events,
-                    &profopts.num_profile_online_events,
-                    &weight,
-                    &algo,
-                    &sort,
-                    profopts.profile_online_weights,
-                    0);
+    sh_packing_init(prof.profile, &opts);
   }
 
   /* Figure out the amount of free memory that we're starting out with */
@@ -224,12 +191,13 @@ void profile_online_init() {
   prof.profile_online.lower_dl->devices = orig_malloc(sizeof(deviceptr));
   prof.profile_online.lower_dl->devices[0] = tracker.lower_device;
 
-  prof.profile_online.num_reconfigures = 0;
   prof.profile_online.upper_contention = 0;
 
   /* Initialize the strategy-specific stuff */
   if(profopts.profile_online_orig) {
     profile_online_init_orig();
+  } else if(profopts.profile_online_ski) {
+    profile_online_init_ski();
   }
 }
 
@@ -240,5 +208,4 @@ void profile_online_post_interval(arena_profile *info) {
 }
 
 void profile_online_skip_interval(int s) {
-  end_interval();
 }

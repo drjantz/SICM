@@ -1,6 +1,6 @@
 #pragma once
-#ifndef __USE_LARGEFILE64
-#define __USE_LARGEFILE64
+#ifndef _USE_LARGEFILE64
+#define _USE_LARGEFILE64
 #endif
 #include <stdint.h> /* For uint64_t, etc. */
 #include <stdlib.h> /* For size_t */
@@ -26,11 +26,11 @@ struct __attribute__ ((__packed__)) sample {
 union pfn_t {
   uint64_t raw;
   struct {
-    uint64_t pfn:       55;
-    uint32_t soft_dirty: 1;
-    uint32_t exclusive:  1;
-    uint32_t phsift:     4;
-    uint32_t res:        1;
+    uint64_t pfn:        55;
+    uint32_t soft_dirty:  1;
+    uint32_t excl:        1;
+    uint32_t zero:        4;
+    uint32_t filepage:    1;
     uint32_t swapped:    1;
     uint32_t present:    1;
   } obj;
@@ -39,7 +39,8 @@ union pfn_t {
 typedef struct per_event_profile_all_info {
   size_t total, peak, current;
 } per_event_profile_all_info;
-void sh_get_event();
+
+void sh_get_profile_all_event();
 
 typedef struct profile_all_info {
   /* profile_all */
@@ -59,13 +60,80 @@ typedef struct profile_all_data {
 } profile_all_data;
 
 /********************
+ * PROFILE_BW
+ ********************/
+typedef struct per_arena_profile_bw_info {
+  /* This is per-arena, but not per-socket. Requires profile_bw_relative. 
+     Uses values gathered from profile_all. */
+  size_t peak, current, total;
+} per_arena_profile_bw_info;
+ 
+typedef struct per_skt_profile_bw_info {
+  /* These are in the unit of cache lines per second.
+     On most systems, multiply by 64 and divide by 1,000,000 to get MB/s. */
+  size_t peak, current;
+} per_skt_profile_bw_info;
+
+typedef struct profile_bw_info {
+  per_skt_profile_bw_info *skt;
+} profile_bw_info;
+ 
+typedef struct profile_bw_data {
+  /* These are one-dimensional arrays that're the size of num_profile_bw_events */
+  struct perf_event_attr ****pes;
+  int ***fds;
+  size_t pagesize;
+  struct timespec start, end, actual;
+} profile_bw_data;
+
+/********************
+ * PROFILE_LATENCY
+ ********************/
+typedef struct per_skt_profile_latency_info {
+  double upper_read_peak, upper_read_current,
+         upper_write_peak, upper_write_current,
+         lower_read_peak, lower_read_current,
+         lower_write_peak, lower_write_current;
+  double read_ratio,
+         read_ratio_cma,
+         write_ratio,
+         write_ratio_cma;
+} per_skt_profile_latency_info;
+
+typedef struct profile_latency_info {
+  per_skt_profile_latency_info *skt;
+} profile_latency_info;
+
+typedef struct profile_latency_data {
+  /* One per event, per IMC, per socket */
+  struct perf_event_attr ****pes;
+  int ***fds;
+  
+  /* One per socket */
+  struct perf_event_attr **clocktick_pes;
+  int *clocktick_fds;
+  
+  struct timespec start, end, actual;
+  
+  /* To keep track of the cumulative moving average */
+  double *prev_read_cma, *prev_write_cma;
+  size_t num_samples;
+} profile_latency_data;
+
+/********************
  * PROFILE_RSS
  ********************/
-
+ 
 typedef struct profile_rss_info {
+  double time;
+} profile_rss_info;
+
+typedef struct per_arena_profile_rss_info {
   /* profile_rss */
   size_t peak, current;
-} profile_rss_info;
+  size_t non_present; /* The number of bytes that are allocated to it */
+  float present_percentage; /* The percentage of present bytes */
+} per_arena_profile_rss_info;
 
 typedef struct profile_rss_data {
   /* profile_rss */
@@ -127,12 +195,17 @@ use_tree(dirty_profile_ptr, addr_t);
 #endif
 
 typedef struct profile_online_info {
-  /* profile_online */
+  char reconfigure; /* If there was a rebinding this interval */
+  char phase_change;
+} profile_online_info;
+
+typedef struct per_arena_profile_online_info {
+  /* profile_online per-arena */
   char dev; /* The device it was on at the end of the interval.
                0 for lower, 1 for upper, -1 for not yet set. */
   char hot; /* Whether it was hot or not. -1 for not yet set. */
   size_t num_hot_intervals; /* How long it's been hot, as of this interval. */
-} profile_online_info;
+} per_arena_profile_online_info;
 
 typedef struct profile_online_data_orig {
   /* Metrics that only the orig strat needs */
@@ -148,11 +221,11 @@ typedef struct profile_online_data_ski {
 } profile_online_data_ski;
 
 typedef struct profile_online_data {
-  size_t num_reconfigures;
   size_t profile_online_event_index;
   sicm_dev_ptr upper_dl, lower_dl;
   char upper_contention; /* Upper tier full? */
   tree(site_info_ptr, int) offline_sorted_sites;
+  size_t upper_avail, lower_avail;
 
   /* Strat-specific data */
   profile_online_data_orig *orig;
@@ -200,7 +273,7 @@ void profile_rss_skip_interval(int);
 void profile_rss_post_interval(arena_profile *);
 void profile_rss_init();
 void profile_rss_deinit();
-void profile_rss_arena_init(profile_rss_info *);
+void profile_rss_arena_init(per_arena_profile_rss_info *);
 
 void *profile_extent_size(void *);
 void profile_extent_size_interval(int);
@@ -224,7 +297,7 @@ void *profile_online(void *);
 void profile_online_interval(int);
 void profile_online_post_interval(arena_profile *);
 void profile_online_skip_interval(int);
-void profile_online_arena_init(profile_online_info *);
+void profile_online_arena_init(per_arena_profile_online_info *);
 
 void *profile_dirty(void *);
 void profile_dirty_interval(int);
@@ -233,3 +306,17 @@ void profile_dirty_post_interval();
 void profile_dirty_init();
 void profile_dirty_deinit();
 
+void profile_bw_init();
+void profile_bw_deinit();
+void *profile_bw(void *);
+void profile_bw_interval(int);
+void profile_bw_post_interval();
+void profile_bw_skip_interval(int);
+
+void profile_latency_init();
+void profile_latency_deinit();
+void *profile_latency(void *);
+void profile_latency_interval(int);
+void profile_latency_post_interval();
+void profile_latency_skip_interval(int);
+>>>>>>> 240ff40a060141a4cc94a6bee49803311efa3d97

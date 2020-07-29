@@ -12,9 +12,6 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
-#if 0
-#include "llvm/Support/Error.h"
-#endif
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -1186,7 +1183,7 @@ out:
 
             fprintf(nclones_file, "%llu\n", ncloned);
 
-#if LLVM_VERSION_MAJOR >= 4
+#if (LLVM_VERSION_MAJOR >= 4) && (LLVM_VERSION_MAJOR < 7)
             if (CompassQuickExit) {
                 // Writing the bitcode ourselves is faster.
                 //fprintf(stderr, "writing bitcode..\n", n_sites);
@@ -1228,4 +1225,3 @@ char compass::ID = 0;
 static RegisterPass<compass> X("compass", "compass Pass",
                                false /* Only looks at CFG */,
                                false /* Analysis Pass */);
-

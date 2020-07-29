@@ -4,9 +4,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <unistd.h>
 #include <sys/syscall.h>
 #include <errno.h>
+#include <unistd.h>
 #include <sys/types.h>
 
 
@@ -15,7 +15,7 @@
 #include "sicm_profilers.h"
 #include "sicm_profile.h"
 
-void profile_rss_arena_init(profile_rss_info *);
+void profile_rss_arena_init(per_arena_profile_rss_info *);
 void profile_rss_deinit();
 void profile_rss_init();
 void *profile_rss(void *);
@@ -23,9 +23,11 @@ void profile_rss_interval(int);
 void profile_rss_skip_interval(int);
 void profile_rss_post_interval(arena_profile *);
 
-void profile_rss_arena_init(profile_rss_info *info) {
+void profile_rss_arena_init(per_arena_profile_rss_info *info) {
   info->peak = 0;
   info->current = 0;
+  info->non_present = 0;
+  info->present_percentage = 0.0;
 }
 
 void profile_rss_deinit() {
@@ -52,7 +54,6 @@ void *profile_rss(void *a) {
 
 /* Just copies the previous value */
 void profile_rss_skip_interval(int s) {
-  end_interval();
 }
 
 void profile_rss_interval(int s) {
@@ -62,17 +63,24 @@ void profile_rss_interval(int s) {
   arena_info *arena;
   ssize_t num_read;
   arena_profile *aprof;
-  struct timespec start_time, end_time, elapsed_time, target_time;
+  struct timespec start_time, end_time, actual;
 
-  if (prof.profile_rss.bailout) {
-    prof.profile_rss.bailout = 0;
-    return;
-  }
-
+  /* Time this interval */
   clock_gettime(CLOCK_MONOTONIC, &start_time);
-
+  
   /* Grab the lock for the extents array */
   pthread_rwlock_rdlock(&tracker.extents_lock);
+  
+  extent_arr_for(tracker.extents, i) {
+    arena = (arena_info *) tracker.extents->arr[i].arena;
+    if(!arena) continue;
+    aprof = get_arena_prof(arena->index);
+    if(!aprof) continue;
+    
+    aprof->profile_rss.current = 0;
+    aprof->profile_rss.non_present = 0;
+    aprof->profile_rss.present_percentage = 0.0;
+  }
 
   /* Iterate over the chunks */
   extent_arr_for(tracker.extents, i) {
@@ -80,10 +88,13 @@ void profile_rss_interval(int s) {
     end = (uint64_t) tracker.extents->arr[i].end;
     arena = (arena_info *) tracker.extents->arr[i].arena;
     if(!arena) continue;
-    aprof = prof.profile->arenas[arena->index];
+    aprof = get_arena_prof(arena->index);
     if(!aprof) continue;
 
+    /* Figure out the number of pages in this extent */
     numpages = (end - start) / prof.profile_rss.pagesize;
+    aprof->profile_rss.non_present += (end - start);
+    
     prof.profile_rss.pfndata = (union pfn_t *) orig_realloc(prof.profile_rss.pfndata, numpages * prof.profile_rss.addrsize);
 
     /* Seek to the starting of this chunk in the pagemap */
@@ -111,26 +122,27 @@ void profile_rss_interval(int s) {
       aprof->profile_rss.current += prof.profile_rss.pagesize;
     }
   }
-
-  pthread_rwlock_unlock(&tracker.extents_lock);
-
-  clock_gettime(CLOCK_MONOTONIC, &end_time);
-  timespec_diff(&start_time, &end_time, &elapsed_time);
-  prof_rate = (profopts.profile_rate_nseconds * profopts.profile_rss_skip_intervals);
-  target_time.tv_sec = prof_rate / 1000000000;
-  target_time.tv_nsec = prof_rate % 1000000000;
-  if (timespec_cmp(&target_time, &elapsed_time) != 0) {
-    prof.profile_rss.bailout = 1;
+  
+  extent_arr_for(tracker.extents, i) {
+    arena = (arena_info *) tracker.extents->arr[i].arena;
+    if(!arena) continue;
+    aprof = get_arena_prof(arena->index);
+    if(!aprof) continue;
+    
+    aprof->profile_rss.present_percentage = (float) (((double) aprof->profile_rss.current) / ((double) aprof->profile_rss.non_present));
   }
 
-  end_interval();
+  pthread_rwlock_unlock(&tracker.extents_lock);
+  
+  clock_gettime(CLOCK_MONOTONIC, &end_time);
+  timespec_diff(&start_time, &end_time, &actual);
+  get_profile_rss_prof()->time = actual.tv_sec + (((double) actual.tv_nsec) / 1000000000);
 }
 
 void profile_rss_post_interval(arena_profile *info) {
-  profile_rss_info *aprof;
-
+  per_arena_profile_rss_info *aprof;
+  
   aprof = &(info->profile_rss);
-
   /* Maintain the peak for this arena */
   if(aprof->current > aprof->peak) {
     aprof->peak = aprof->current;
