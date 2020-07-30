@@ -67,6 +67,7 @@ void profile_rss_interval(int s) {
 
   /* Time this interval */
   clock_gettime(CLOCK_MONOTONIC, &start_time);
+  //fprintf(stderr, "starting rss thread\n"); fflush(stderr);
   
   /* Grab the lock for the extents array */
   pthread_rwlock_rdlock(&tracker.extents_lock);
@@ -95,17 +96,24 @@ void profile_rss_interval(int s) {
     numpages = (end - start) / prof.profile_rss.pagesize;
     aprof->profile_rss.non_present += (end - start);
     
-    prof.profile_rss.pfndata = (union pfn_t *) orig_realloc(prof.profile_rss.pfndata, numpages * prof.profile_rss.addrsize);
+    prof.profile_rss.pfndata = (union pfn_t *) orig_realloc( 
+      prof.profile_rss.pfndata, numpages * prof.profile_rss.addrsize);
 
     /* Seek to the starting of this chunk in the pagemap */
-    if(lseek64(prof.profile_rss.pagemap_fd, (start / prof.profile_rss.pagesize) * prof.profile_rss.addrsize, SEEK_SET) == ((__off64_t) - 1)) {
+    pthread_mutex_lock(&tracker.pagemap_lock);
+    if(lseek64(prof.profile_rss.pagemap_fd,
+       (start / prof.profile_rss.pagesize) * prof.profile_rss.addrsize,
+       SEEK_SET) == ((__off64_t) - 1)) {
       close(prof.profile_rss.pagemap_fd);
       fprintf(stderr, "Failed to seek in the PageMap file. Aborting.\n");
       exit(1);
     }
 
     /* Read in all of the pfns for this chunk */
-    num_read = read(prof.profile_rss.pagemap_fd, prof.profile_rss.pfndata, prof.profile_rss.addrsize * numpages);
+    num_read = read(prof.profile_rss.pagemap_fd, prof.profile_rss.pfndata,
+                    prof.profile_rss.addrsize * numpages);
+    pthread_mutex_unlock(&tracker.pagemap_lock);
+
     if(num_read == -1) {
       fprintf(stderr, "Failed to read from PageMap file. Aborting: %d, %s\n", errno, strerror(errno));
       exit(1);
@@ -129,7 +137,9 @@ void profile_rss_interval(int s) {
     aprof = get_arena_prof(arena->index);
     if(!aprof) continue;
     
-    aprof->profile_rss.present_percentage = (float) (((double) aprof->profile_rss.current) / ((double) aprof->profile_rss.non_present));
+    aprof->profile_rss.present_percentage = (float)
+      (((double) aprof->profile_rss.current) /
+       ((double) aprof->profile_rss.non_present));
   }
 
   pthread_rwlock_unlock(&tracker.extents_lock);

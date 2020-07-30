@@ -17,6 +17,7 @@ void get_pfn(int pagemap_fd, addr_t vaddr, region_profile_ptr page_rec) {
   pagesize = (1<<PAGE_SHIFT);
   addrsize = sizeof(uint64_t);
 
+  pthread_mutex_lock(&tracker.pagemap_lock);
   if( lseek64(pagemap_fd, (((uint64_t)vaddr) / pagesize) * addrsize, SEEK_SET) ==
       ((__off64_t) - 1) ) {
     close(pagemap_fd);
@@ -25,6 +26,8 @@ void get_pfn(int pagemap_fd, addr_t vaddr, region_profile_ptr page_rec) {
   }
 
   bytes_read = read(pagemap_fd, &pfndata, addrsize);
+  pthread_mutex_unlock(&tracker.pagemap_lock);
+
   if(bytes_read == -1) {
     fprintf(stderr, "Failed to read from PageMap file. Aborting: %d, %s\n", errno, strerror(errno));
     exit(1);

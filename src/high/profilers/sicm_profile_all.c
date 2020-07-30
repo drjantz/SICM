@@ -273,7 +273,6 @@ void profile_all_interval(int s) {
       }
       fflush(profopts.profile_output_file);
 #endif
-#if 0
       if(head == prof.profile_all.prev_head[x][i]) {
         pid_t pid;
         int cpu, group_fd;
@@ -318,7 +317,7 @@ void profile_all_interval(int s) {
         ioctl(prof.profile_all.fds[x][i], PERF_EVENT_IOC_ENABLE, 0);
         continue;
       }
-#endif
+
       if(head == prof.profile_all.prev_head[x][i]) {
         continue;
       }
@@ -488,10 +487,10 @@ void update_page_rec(addr_t addr, size_t evt, int arena_num_alloc_sites, int *ar
   tree_it(addr_t, region_profile_ptr) it;
   addr_t page_addr = (addr_t)(PAGE_ADDR(addr));
  
-  it = tree_lookup(prof.profile->page_map, page_addr);
+  it = tree_lookup(prof.profile->this_interval.page_map, page_addr);
   if (!(tree_it_good(it))) {
     page_rec = get_new_region_profile();
-    tree_insert(prof.profile->page_map, page_addr, page_rec);
+    tree_insert(prof.profile->this_interval.page_map, page_addr, page_rec);
   } else {
     page_rec = tree_it_val(it);
   }
@@ -558,10 +557,10 @@ void update_cache_block_rec(addr_t addr, size_t evt, int arena_num_alloc_sites, 
   tree_it(addr_t, region_profile_ptr) it;
   addr_t cache_block_addr = (addr_t)(CACHE_BLOCK_ADDR(addr));
 
-  it = tree_lookup(prof.profile->cache_block_map, cache_block_addr);
+  it = tree_lookup(prof.profile->this_interval.cache_block_map, cache_block_addr);
   if (!(tree_it_good(it))) {
     cache_block_rec = get_new_region_profile();
-    tree_insert(prof.profile->cache_block_map, cache_block_addr, cache_block_rec);
+    tree_insert(prof.profile->this_interval.cache_block_map, cache_block_addr, cache_block_rec);
   } else {
     cache_block_rec = tree_it_val(it);
   }

@@ -194,6 +194,7 @@ void sh_start_profile_master_thread();
 void sh_stop_profile_master_thread();
 void create_arena_profile(int, int);
 void add_site_profile(int, int);
+//uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_site);
 
 /* Given an arena and index, check to make sure it's not NULL */
 #define prof_check_good(a, p, i) \
@@ -296,7 +297,7 @@ static inline void reset_region_map( tree(addr_t, region_profile_ptr) map)
   }
 }
 
-static uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_site) {
+static inline uint64_t_ptr get_site_rec(tree(int, uint64_t_ptr) site_profile, int cur_site) {
   tree_it(int, uint64_t_ptr) it;
   uint64_t_ptr site_rec;
   size_t i;
@@ -373,6 +374,9 @@ static inline void copy_interval_profile(size_t index) {
     copy_region_map(interval->page_map, this_interval->page_map);
     profile_all_post_interval_region_map ( this_interval->page_map );
     reset_region_map(this_interval->page_map);
+  } else {
+    interval->page_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(interval->page_map, this_interval->page_map);
   }
 
   if (profopts.cache_block_profile_intervals) {
@@ -380,6 +384,9 @@ static inline void copy_interval_profile(size_t index) {
     copy_region_map(interval->cache_block_map, this_interval->cache_block_map);
     profile_all_post_interval_region_map ( this_interval->cache_block_map ); 
     reset_region_map(this_interval->cache_block_map);
+  } else {
+    interval->page_map = tree_make(addr_t, region_profile_ptr);
+    copy_region_map(interval->page_map, this_interval->page_map);
   }
   
   interval->time = this_interval->time;

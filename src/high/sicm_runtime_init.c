@@ -183,6 +183,10 @@ void set_options() {
   if(env) {
     profopts.print_profile_intervals = 1;
   }
+  if(tracker.log_file) {
+    fprintf(tracker.log_file, "SH_PRINT_PROFILE_INTERVALS: %d\n",
+      profopts.print_profile_intervals);
+  }
 
   /* Do we want to use the online approach, moving arenas around devices automatically? */
   env = getenv("SH_PROFILE_ONLINE");
@@ -575,17 +579,6 @@ void set_options() {
   }
 
   /* Should we keep track of when each allocation happened, in intervals? */
-  env = getenv("SH_PRINT_PER_INTERVAL_PROFILE");
-  profopts.print_per_interval_profile = 0;
-  if(env) {
-    profopts.print_per_interval_profile = 1;
-  }
-  if(tracker.log_file) {
-    fprintf(tracker.log_file, "SH_PRINT_PER_INTERVAL_PROFILE: %d\n",
-      profopts.print_per_interval_profile);
-  }
-
-  /* Should we keep track of when each allocation happened, in intervals? */
   env = getenv("SH_PROFILE_ALLOCS");
   if(env) {
     enable_profile_allocs();
@@ -755,7 +748,7 @@ void set_options() {
     }
   }
   if(tracker.log_file) {
-    fprintf(tracker.log_file, "SH_PROFILE_RSS: %d\n", profopts.should_profile_rss);
+    fprintf(tracker.log_file, "SH_PROFILE_RSS: %d\n", should_profile_rss());
     fprintf(tracker.log_file, "SH_PROFILE_RSS_SKIP_INTERVALS: %d\n", profopts.profile_rss_skip_intervals);
   }
 
@@ -1020,6 +1013,7 @@ void sh_init() {
   /* Initialize all of the locks */
   pthread_rwlock_init(&tracker.extents_lock, NULL);
   pthread_mutex_init(&tracker.arena_lock, NULL);
+  pthread_mutex_init(&tracker.pagemap_lock, NULL);
   pthread_rwlock_init(&tracker.device_arenas_lock, NULL);
 
   /* Get the number of NUMA nodes with memory, since we ignore huge pages with

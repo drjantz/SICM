@@ -358,10 +358,10 @@ void initialize_profiling() {
   prof.profile->this_interval.arenas = orig_calloc(tracker.max_arenas, sizeof(arena_profile *));
 
   if (profopts.track_pages) {
-    prof.profile->page_map = tree_make(addr_t, region_profile_ptr);
+    prof.profile->this_interval.page_map = tree_make(addr_t, region_profile_ptr);
   }
   if (profopts.track_cache_blocks) {
-    prof.profile->cache_block_map = tree_make(addr_t, region_profile_ptr);
+    prof.profile->this_interval.cache_block_map = tree_make(addr_t, region_profile_ptr);
   }
 
   /* Store the profile_all event strings */

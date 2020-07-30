@@ -31,8 +31,8 @@ union pfn_t {
     uint32_t excl:        1;
     uint32_t zero:        4;
     uint32_t filepage:    1;
-    uint32_t swapped:    1;
-    uint32_t present:    1;
+    uint32_t swapped:     1;
+    uint32_t present:     1;
   } obj;
 };
 
@@ -319,4 +319,3 @@ void *profile_latency(void *);
 void profile_latency_interval(int);
 void profile_latency_post_interval();
 void profile_latency_skip_interval(int);
->>>>>>> 240ff40a060141a4cc94a6bee49803311efa3d97

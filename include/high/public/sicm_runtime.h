@@ -50,6 +50,7 @@ use_tree(int, uint64_t_ptr);
 
 /* Information about a single arena */
 typedef struct arena_info {
+  int *alloc_sites, num_alloc_sites;
   unsigned index; /* Index into the arenas array */
   sicm_arena arena; /* SICM's low-level interface pointer */
   size_t size; /* The total size of the arena's allocations */
@@ -105,6 +106,9 @@ typedef struct tracker_struct {
   int max_arenas, arenas_per_thread, max_sites_per_arena, max_sites;
   int max_index;
   pthread_mutex_t arena_lock;
+
+  /* MRJ -- I really don't know why this is necessary */
+  pthread_mutex_t pagemap_lock;
 
   /* Only for profile_allocs. Stores allocated pointers as keys,
    * their arenas as values. For looking up which arena a `free` call

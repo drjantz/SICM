@@ -57,22 +57,6 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
   size_t i, n, x, cur_interval, first_interval;
   arena_profile *aprof;
 
-#if 0
-  for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
-#if 0
-    for(n = 0; n < ((info->num_profile_all_events)+1); n++) {
-      val_prof.events[n].current = 0;
-    }
-#endif
-    if (profopts.print_per_interval_profile) {
-      fprintf(file, "===== BEGIN INTERVAL %zu PROFILING =====\n", cur_interval);
-      fprintf(file, "Number of PROFILE_ALL events: %zu\n", info->num_profile_all_events);
-      fprintf(file, "Number of arenas: %zu\n", info->intervals[cur_interval].num_arenas);
-      fprintf(file, "Upper Capacity: %zu\n", info->upper_capacity);
-      fprintf(file, "Lower Capacity: %zu\n", info->lower_capacity);
-    }
-=======
-#endif
   arena_info *arena;
   profile_rss_info *profile_rss_aprof;
   per_skt_profile_bw_info *profile_bw_aprof;
@@ -96,14 +80,10 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
   } else {
     first_interval = info->num_intervals - 1;
   }
-#else
-  first_interval = 0;
-#endif
   
   /* If we're not printing every interval's profiling, just skip to the last
      interval. If we're not in SICM's runtime library, we're just going to 
      print all intervals no matter what. */
-
   for(cur_interval = first_interval; cur_interval < info->num_intervals; cur_interval++) {
     if (profopts.print_profile_intervals) {
       /* Common information for the whole application */
@@ -169,7 +149,7 @@ static void sh_print_profiling(application_profile *info, FILE *file) {
       if(!aprof) continue;
 
       /* Arena information and sites that are in this one arena */
-      if (profopts.print_per_interval_profile) {
+      if (profopts.print_profile_intervals) {
         fprintf(file, "BEGIN ARENA %u\n", aprof->index);
         fprintf(file, "  Number of allocation sites: %d\n", aprof->num_alloc_sites);
         fprintf(file, "  Allocation sites: ");
@@ -378,14 +358,12 @@ static void sh_print_page_profile(application_profile *info, FILE *file) {
   tree_it(addr_t, region_profile_ptr) it;
   region_profile_ptr page_rec;
 
-  //get_page_map_pfns(info->page_map);
   if (!profopts.page_profile_intervals) {
     sh_print_region_profile_header(file, info, "page_addr");
-    tree_traverse(info->page_map, it) {
+    tree_traverse(info->this_interval.page_map, it) {
       sh_print_region_profile_line(file, info, it, PAGE_SHIFT);
     }
     fprintf(file, "\n");
-
   } else {
     for(cur_interval = 0; cur_interval < info->num_intervals; cur_interval++) {
       cur_page_map = info->intervals[cur_interval].page_map;
@@ -409,7 +387,7 @@ static void sh_print_cache_block_profile(application_profile *info, FILE *file) 
 
   if (!profopts.cache_block_profile_intervals) {
     sh_print_region_profile_header(file, info, "cache_block_addr");
-    tree_traverse(info->cache_block_map, it) {
+    tree_traverse(info->this_interval.cache_block_map, it) {
       sh_print_region_profile_line(file, info, it, CACHE_BLOCK_SHIFT);
     }
     fprintf(file, "\n");

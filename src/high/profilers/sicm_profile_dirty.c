@@ -22,6 +22,11 @@ void profile_dirty_interval(int);
 void profile_dirty_skip_interval(int);
 void profile_dirty_post_interval();
 
+/* MRJ -- 07/29/20 -- I updated this code to incorporate Ben's changes from
+ * the beginning of the summer and I did not test it. This code is likely
+ * broken.
+ */
+
 void profile_dirty_deinit() {
   close(prof.profile_dirty.pagemap_fd);
   fclose(profopts.dirty_profile_output_file);
@@ -65,7 +70,6 @@ void *profile_dirty(void *a) {
 
 /* Just copies the previous value */
 void profile_dirty_skip_interval(int s) {
-  end_interval();
 }
 
 void profile_dirty_interval(int s) {
@@ -154,20 +158,11 @@ void profile_dirty_interval(int s) {
       if (prof.profile_dirty.pfndata[n].obj.soft_dirty) {
         dirty_rec->last_dirty_val = prof.profile_dirty.cur_val;
       }
-      //fprintf(stderr, "    pg: %"PRIu64" new: %d soft: %d last: %d\n",
-      //        addr, new, prof.profile_dirty.pfndata[n].obj.soft_dirty,
-      //        dirty_rec->last_dirty_val);
     }
   }
   pthread_rwlock_unlock(&tracker.extents_lock);
 
   clock_gettime(CLOCK_MONOTONIC, &(prof.profile_dirty.prev_time));
-  //timespec_diff(&(prof.profile_dirty.prev_time), &cur_time, &elapsed_time);
-  //fprintf(profopts.dirty_profile_output_file, "done: %-6d%11d.%03ld\n",
-  //  prof.profile_dirty.cur_val, (long long)elapsed_time.tv_sec,
-  //  (elapsed_time.tv_nsec / (1000000)));
-
-  end_interval();
 }
 
 void profile_dirty_post_interval() {

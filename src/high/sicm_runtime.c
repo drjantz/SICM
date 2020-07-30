@@ -14,7 +14,6 @@
 
 #define SICM_RUNTIME 1
 #include "sicm_runtime.h"
-#include "sicm_profile.h"
 #include "sicm_rdspy.h"
 #include "sicm_profile.h"
 
@@ -527,11 +526,11 @@ void* sh_realloc(int id, void *ptr, size_t sz) {
       if (profopts.should_run_rdspy) {
         sh_rdspy_realloc(ptr, ret, sz, id);
       }
-    }
-  }
 
-  if(do_pin_callbacks && sh_initialized) {
-    sh_realloc_pin_callback(ret, ptr, sz, id);
+      if(do_pin_callbacks) {
+        sh_realloc_pin_callback(ret, ptr, sz, id);
+      }
+    }
   }
 
   return ret;
@@ -547,22 +546,23 @@ void* sh_alloc(int id, size_t sz) {
   } else {
     index = get_arena_index(id, sz);
     ret = sicm_arena_alloc(tracker.arenas[index]->arena, sz);
-  }
 
-  if (profopts.should_profile_objects) {
-    profile_objects_alloc(ret, sz, id);
-  }
+    if (profopts.should_profile_objects) {
+      profile_objects_alloc(ret, sz, id);
+    }
 
-  if(should_profile_allocs()) {
-    profile_allocs_alloc(ret, sz, index);
-  }
+    if(should_profile_allocs()) {
+      profile_allocs_alloc(ret, sz, index);
+    }
 
-  if (profopts.should_run_rdspy) {
-    sh_rdspy_alloc(ret, sz, id);
-  }
+    if (profopts.should_run_rdspy) {
+      sh_rdspy_alloc(ret, sz, id);
+    }
 
-  if(do_pin_callbacks && sh_initialized) {
-    sh_alloc_pin_callback(ret, sz, id);
+    if(do_pin_callbacks) {
+      sh_alloc_pin_callback(ret, sz, id);
+    }
+
   }
 
   return ret;
@@ -577,22 +577,22 @@ void* sh_aligned_alloc(int id, size_t alignment, size_t sz) {
   } else {
     index = get_arena_index(id, sz);
     ret = sicm_arena_alloc_aligned(tracker.arenas[index]->arena, sz, alignment);
-  }
 
-  if (profopts.should_profile_objects) {
-    profile_objects_alloc(ret, sz, id);
-  }
+    if (profopts.should_profile_objects) {
+      profile_objects_alloc(ret, sz, id);
+    }
 
-  if(should_profile_allocs()) {
-    profile_allocs_alloc(ret, sz, index);
-  }
+    if(should_profile_allocs()) {
+      profile_allocs_alloc(ret, sz, index);
+    }
 
-  if (profopts.should_run_rdspy) {
-    sh_rdspy_alloc(ret, sz, id);
-  }
+    if (profopts.should_run_rdspy) {
+      sh_rdspy_alloc(ret, sz, id);
+    }
 
-  if (do_pin_callbacks && sh_initialized) {
-    sh_aligned_alloc_pin_callback(ret, sz, id);
+    if (do_pin_callbacks) {
+      sh_aligned_alloc_pin_callback(ret, sz, id);
+    }
   }
 
   return ret;
@@ -621,10 +621,6 @@ void sh_free(void* ptr) {
     return;
   }
 
-  if (do_pin_callbacks && sh_initialized) {
-    sh_free_pin_callback(ptr);
-  }
-
   if(!sh_initialized || (tracker.layout == INVALID_LAYOUT)) {
     je_dallocx(ptr, MALLOCX_TCACHE_NONE);
     return;
@@ -640,6 +636,10 @@ void sh_free(void* ptr) {
 
   if(should_profile_allocs()) {
     profile_allocs_free(ptr);
+  }
+
+  if (do_pin_callbacks && sh_initialized) {
+    sh_free_pin_callback(ptr);
   }
 
   sicm_free(ptr);
