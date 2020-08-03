@@ -44,11 +44,13 @@ sicm_device_tag sicm_get_device_tag(char *env);
 
 /// Flags that define how allocations in an arena are performed
 typedef enum sicm_arena_flags {
-  SICM_ALLOC_MASK    = 7,	// lowest 3 bits
-  SICM_ALLOC_STRICT  = 0,	// don't use any devices outside of the assigned
-  SICM_ALLOC_RELAXED = 1,	// prefer the assigned devices, but use other memory too
-  SICM_MOVE_RELAXED  = 2, // don't block when pages are moved, let them fault on access
+  SICM_ALLOC_MASK     = 7,	// lowest 3 bits
+  SICM_ALLOC_STRICT   = 0,	// don't use any devices outside of the assigned
+  SICM_ALLOC_RELAXED  = 1,	// prefer the assigned devices, but use other memory too
+  SICM_MOVE_RELAXED   = 2,  // don't block when pages are moved, let them fault on access
+  SICM_MADV_COMPRESS  = 4,	// compress the data in this arena
 } sicm_arena_flags;
+#define MADV_COMPRESS 22
 
 /// Data specific to a DRAM device.
 typedef struct sicm_dram_data {

@@ -1,5 +1,4 @@
 #pragma once
-
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -56,6 +55,7 @@ static void timespec_diff(struct timespec *start, struct timespec *stop,
 #define PAGE_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> PAGE_SHIFT))
 #define CACHE_BLOCK_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> CACHE_BLOCK_SHIFT))
 #define PFN_INVALID 1ull
+#define PAGE_SIZE (1<<PAGE_SHIFT)
 
 /* Profiling information for one arena */
 typedef struct arena_profile {

@@ -5,13 +5,51 @@
 #include <sys/time.h>
 #include <sys/syscall.h>
 #include <signal.h>
-
+#include <sched.h>
 #define SICM_RUNTIME 1
 #include "sicm_profile.h"
 #include "sicm_parsing.h"
 
 profiler prof;
 static int global_signal;
+
+unsigned long long get_stat(const char *fname, int pos)
+{
+  FILE *fptr;
+  int cnt;
+  unsigned long long tmp, stat;
+
+  fptr = fopen(fname, "r");
+  if (!fptr) {
+    fprintf(stderr, "Error opening %s\n", fname);
+    perror("");
+    exit(errno);
+  }
+
+  while (cnt < pos) {
+    if ( (fscanf(fptr, "%llu", &stat)) != 1 ) {
+      fprintf(stderr, "Error reading %s\n", fname);
+      exit(-EINVAL);
+    }
+    cnt++;
+  }
+  fclose(fptr);
+
+  return stat;
+}
+
+void print_compress_stats(FILE *compressf)
+{
+  unsigned long long rss, cmp, d_rss, p_rss;
+
+  rss   = (get_stat(PROC_SELF_STATM, 2) * PAGE_SIZE);
+  cmp   = (get_stat(ZSWAP_STORED_PAGES, 1) * PAGE_SIZE);
+  d_rss = get_stat(CGROUP_MEM_CURRENT, 1);
+  p_rss = get_stat(ZSWAP_POOL_TOTAL_SIZE, 1);
+  
+  fprintf(compressf, "rss: %12llu cmp: %12llu d_rss: %12llu p_rss: %12llu\n",
+          rss, cmp, d_rss, p_rss);
+}
 
 /* Runs when an arena has already been created, but the runtime library
    has added an allocation site to the arena. */
@@ -70,6 +108,12 @@ void profile_master_interval(int s) {
   arena_profile *aprof;
   arena_info *arena;
   profile_thread *profthread;
+
+  /* this is really only used for online runs */
+  if (should_profile_compress_stats()) {
+    print_compress_stats(profopts.compress_stats_file);
+    return;
+  }
   
   /* Here, we're checking to see if the time between this interval and
      the previous one is too short. If it is, this is likely a queued-up
@@ -307,7 +351,10 @@ void *profile_master(void *a) {
   /* Wait for either the timer to signal us to start a new interval,
    * or for the main thread to signal us to stop.
    */
-  while(1) {}
+  //while(1) {}
+  while(1) {
+    sched_yield();
+  }
 }
 
 void init_application_profile(application_profile *profile) {
@@ -371,7 +418,7 @@ void initialize_profiling() {
     prof.profile->profile_all_events[i] = orig_malloc((strlen(profopts.profile_all_events[i]) + 1) * sizeof(char));
     strcpy(prof.profile->profile_all_events[i], profopts.profile_all_events[i]);
   }
-  
+ 
   /* Store which sockets we profiled */
   prof.profile->num_profile_skts = profopts.num_profile_skt_cpus;
   prof.profile->profile_skts = orig_calloc(prof.profile->num_profile_skts, sizeof(int));
@@ -484,6 +531,9 @@ void sh_stop_profile_master_thread() {
   }
   if(profopts.cache_profile_output_file) {
     sh_print_cache_block_profile(prof.profile, profopts.cache_profile_output_file);
+  }
+  if (profopts.compress_stats_file) {
+    fclose(profopts.compress_stats_file);
   }
   deinitialize_profiling();
 }

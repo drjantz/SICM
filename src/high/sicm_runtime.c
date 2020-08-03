@@ -29,7 +29,7 @@ void *(*orig_realloc_ptr)(void *, size_t);
 void (*orig_free_ptr)(void *);
 
 /* Function declarations, so I can reorder them how I like */
-void sh_create_arena(int index, int id, sicm_device *device);
+void sh_create_arena(int index, int id, char compress, sicm_device *device);
 
 /*************************************************
  *               ORIG_MALLOC                     *
@@ -361,18 +361,27 @@ int get_big_small_arena(int id, size_t sz, deviceptr *device, char *new_site) {
 
 /* Gets the index that the allocation site should go into */
 int get_arena_index(int id, size_t sz) {
-  int ret, thread_index;
+  int ret, thread_index, compress;
   deviceptr device;
   siteinfo_ptr site;
   char new_site;
 
   ret = 0;
   device = NULL;
+  compress = (char)0;
   switch(tracker.layout) {
     case EXCLUSIVE_ARENAS:
       /* One arena per thread. */
       thread_index = get_thread_index();
       ret = thread_index;
+      break;
+    case EXCLUSIVE_COMPRESS_ARENAS:
+      /* Two arenas per thread: one for each memory tier. */
+      thread_index = get_thread_index();
+      compress = tracker.site_compress[id];
+      //fprintf(stderr, "id: %3d tidx: %d compress: %d tptr: %p\n", id,
+      //  thread_index, compress, &(tracker.site_compress[id])); fflush(stderr);
+      ret = (thread_index * tracker.arenas_per_thread) + compress;
       break;
     case EXCLUSIVE_DEVICE_ARENAS:
       /* Two arenas per thread: one for each memory tier. */
@@ -404,14 +413,35 @@ int get_arena_index(int id, size_t sz) {
   /* Assuming thread_index is specific to this thread,
      we don't need a lock here. */
   pending_index = ret;
+  //fprintf(stderr, "ooo: %d %d %d %p %d\n", ret, id, (int)new_site,
+  //tracker.arenas[ret], should_profile());
   if(tracker.arenas[ret] == NULL) {
     /* We've *got* to grab a lock to create a new arena */
     pthread_mutex_lock(&tracker.arena_lock);
-    sh_create_arena(ret, id, device);
+    sh_create_arena(ret, id, compress, device);
     pthread_mutex_unlock(&tracker.arena_lock);
-  } else if(new_site && should_profile()) {
-    add_site_profile(ret, id);
-  }
+  } else if (new_site) {
+
+    /* Add the site to the arena */
+    if(tracker.arenas[ret]->num_alloc_sites == tracker.max_sites_per_arena) {
+      unsigned int i;
+      fprintf(stderr, "Sites: ");
+      for(i = 0; i < tracker.arenas[ret]->num_alloc_sites; i++) {
+        fprintf(stderr, "%d ", tracker.arenas[ret]->alloc_sites[i]);
+      }
+      fprintf(stderr, "\n");
+      fprintf(stderr, "Tried to allocate %d sites into an arena.\n"
+											"Increase SH_MAX_SITES_PER_ARENA.\n",
+										  tracker.max_sites_per_arena + 1);
+      exit(1);
+    }
+    tracker.arenas[ret]->alloc_sites[tracker.arenas[ret]->num_alloc_sites] = id;
+    tracker.arenas[ret]->num_alloc_sites++;
+
+		if (should_profile()) {
+			add_site_profile(ret, id);
+		}
+	}
 
   return ret;
 }
@@ -423,10 +453,11 @@ int get_arena_index(int id, size_t sz) {
  */
  
 /* Adds an arena to the `arenas` array. */
-void sh_create_arena(int index, int id, sicm_device *device) {
+void sh_create_arena(int index, int id, char compress, sicm_device *device) {
   size_t i;
   arena_info *arena;
   siteinfo_ptr site;
+  sicm_arena_flags flags;
   
   /* Put an upper bound on the indices that need to be searched */
   if(index > tracker.max_index) {
@@ -440,12 +471,19 @@ void sh_create_arena(int index, int id, sicm_device *device) {
   /* Create the arena if it doesn't exist */
   arena = orig_calloc(1, sizeof(arena_info));
   arena->index = index;
+	arena->alloc_sites = orig_malloc(sizeof(int) * tracker.max_sites_per_arena);
+	arena->alloc_sites[0] = id;
+	arena->num_alloc_sites = 1;
   /* Need to construct a sicm_device_list of one device */
   sicm_device_list dl;
   dl.count = 1;
   dl.devices = orig_malloc(sizeof(sicm_device *) * 1);
   dl.devices[0] = device;
-  arena->arena = sicm_arena_create(0, SICM_ALLOC_RELAXED, &dl);
+  flags = SICM_ALLOC_RELAXED;
+  if (compress) {
+    flags |= SICM_MADV_COMPRESS;
+  }
+  arena->arena = sicm_arena_create(0, flags, &dl);
   orig_free(dl.devices);
 
   /* Now add the arena to the array of arenas */
@@ -512,8 +550,11 @@ void* sh_realloc(int id, void *ptr, size_t sz) {
     if((tracker.layout == INVALID_LAYOUT) || (id == 0)) {
       ret = je_realloc(ptr, sz);
     } else {
+      //fprintf(stderr, "realloc: %p %d %zu ", ptr, id, sz); fflush(stderr);
       index = get_arena_index(id, sz);
+      //fprintf(stderr, "%d --> ", index); fflush(stderr);
       ret = sicm_arena_realloc(tracker.arenas[index]->arena, ptr, sz);
+      //fprintf(stderr, "%p\n", ret); fflush(stderr);
 
       if(profopts.should_profile_objects) {
         profile_objects_realloc(ret, ptr, sz, id);
@@ -544,8 +585,11 @@ void* sh_alloc(int id, size_t sz) {
   if(!sh_initialized || !id || (tracker.layout == INVALID_LAYOUT) || !sz) {
     ret = je_mallocx(sz, MALLOCX_TCACHE_NONE);
   } else {
+    //fprintf(stderr, "alloc:   %d %zu ", id, sz); fflush(stderr);
     index = get_arena_index(id, sz);
+    //fprintf(stderr, "%d --> ", index); fflush(stderr);
     ret = sicm_arena_alloc(tracker.arenas[index]->arena, sz);
+    //fprintf(stderr, "%p\n", ret); fflush(stderr);
 
     if (profopts.should_profile_objects) {
       profile_objects_alloc(ret, sz, id);
@@ -575,8 +619,11 @@ void* sh_aligned_alloc(int id, size_t alignment, size_t sz) {
   if(!sh_initialized || !id || (tracker.layout == INVALID_LAYOUT) || !sz) {
     ret = je_mallocx(sz, MALLOCX_TCACHE_NONE | MALLOCX_ALIGN(alignment));
   } else {
+    //fprintf(stderr, "aalloc: %d %zu ", id, sz); fflush(stderr);
     index = get_arena_index(id, sz);
+    //fprintf(stderr, "%d --> ", index); fflush(stderr);
     ret = sicm_arena_alloc_aligned(tracker.arenas[index]->arena, sz, alignment);
+    //fprintf(stderr, "%p\n"); fflush(stderr);
 
     if (profopts.should_profile_objects) {
       profile_objects_alloc(ret, sz, id);
@@ -621,6 +668,7 @@ void sh_free(void* ptr) {
     return;
   }
 
+  //fprintf(stderr, "free:    %p\n", ptr); fflush(stderr);
   if(!sh_initialized || (tracker.layout == INVALID_LAYOUT)) {
     je_dallocx(ptr, MALLOCX_TCACHE_NONE);
     return;

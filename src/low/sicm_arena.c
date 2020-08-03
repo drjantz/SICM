@@ -233,6 +233,9 @@ static void sicm_arena_range_move(void *aux, void *start, void *end) {
 		break;
 
 	case SICM_ALLOC_RELAXED:
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED):
+	case (SICM_ALLOC_RELAXED|SICM_MADV_COMPRESS):
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED|SICM_MADV_COMPRESS):
 		// TODO: this will work only for single device, fix it
 		mpol = MPOL_PREFERRED;
 		nodemaskp = sa->nodemask->maskp;
@@ -500,6 +503,9 @@ static void *sa_alloc(extent_hooks_t *h, void *new_addr, size_t size, size_t ali
 		break;
 
 	case SICM_ALLOC_RELAXED:
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED):
+	case (SICM_ALLOC_RELAXED|SICM_MADV_COMPRESS):
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED|SICM_MADV_COMPRESS):
 		// TODO: this will work only for single device, fix it
 		mpol = MPOL_PREFERRED;
 		nodemaskp = sa->nodemask->maskp;
@@ -565,6 +571,13 @@ success:
 		ret = NULL;
 		goto restore_mempolicy;
 	}
+
+  if (sa->flags & SICM_MADV_COMPRESS) {
+    if ( (madvise( ret, size, MADV_COMPRESS )) != 0 ) {
+      perror("madvise error");
+      exit(errno);
+    }
+  }
 
   /* Add the extent to the array of extents */
   extent_arr_insert(sa->extents, ret, (char *)ret + size, NULL);

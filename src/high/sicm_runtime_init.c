@@ -3,6 +3,9 @@
 #include <dlfcn.h>
 #include <stdbool.h>
 #include <numa.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define SICM_RUNTIME 1
 #include "sicm_runtime.h"
@@ -13,6 +16,72 @@ profiling_options profopts = {0};
 
 /* Keeps track of arenas, extents, etc. */
 tracker_struct tracker = {0};
+
+void add_self_to_cgroup(void)
+{
+  char buf[10];
+  FILE *cgroup_tasks;
+
+  cgroup_tasks = fopen(CGROUP_TASKS, "w");
+  if (!cgroup_tasks) {
+    fprintf(stderr, "Error opening %s\n", CGROUP_TASKS);
+    perror("");
+    exit(errno);
+  }
+
+  sprintf(buf, "%d", getpid());
+  fputs(buf, cgroup_tasks);
+  fclose(cgroup_tasks);
+}
+
+/* only concern ourselves with MADV_COMRPESS'd data */
+void cgroup_set_mem_compress(void)
+{
+  FILE *cgroup_mem_compress;
+  cgroup_mem_compress = fopen(CGROUP_MEM_COMPRESS, "w");
+  if (!cgroup_mem_compress) {
+    fprintf(stderr, "Error opening %s\n", CGROUP_MEM_COMPRESS);
+    perror("");
+    exit(errno);
+  }
+  fputs("Y", cgroup_mem_compress);
+  fclose(cgroup_mem_compress);
+}
+
+void cgroup_set_mem_high(size_t nr_bytes)
+{
+  char buf[20];
+  FILE *cgroup_mem_high;
+
+  cgroup_mem_high = fopen(CGROUP_MEM_HIGH, "w");
+  if (!cgroup_mem_high) {
+    fprintf(stderr, "Error opening %s\n", CGROUP_MEM_HIGH);
+    perror("");
+    exit(errno);
+  }
+
+  sprintf(buf, "%llu", nr_bytes);
+  fputs(buf, cgroup_mem_high);
+  fclose(cgroup_mem_high);
+}
+
+void cgroup_set_mem_max(size_t nr_bytes)
+{
+  char buf[20];
+  FILE *cgroup_mem_max;
+
+  cgroup_mem_max = fopen(CGROUP_MEM_MAX, "w");
+  if (!cgroup_mem_max) {
+    fprintf(stderr, "Error opening %s\n", CGROUP_MEM_MAX);
+    perror("");
+    exit(errno);
+  }
+
+  sprintf(buf, "%llu", nr_bytes);
+  fputs(buf, cgroup_mem_max);
+  fclose(cgroup_mem_max);
+}
+
 
 /* Takes a string as input and outputs which arena layout it is */
 enum arena_layout parse_layout(char *env) {
@@ -28,6 +97,8 @@ enum arena_layout parse_layout(char *env) {
     return SHARED_SITE_ARENAS;
   } else if(strncmp(env, "BIG_SMALL_ARENAS", max_chars) == 0) {
     return BIG_SMALL_ARENAS;
+  } else if(strncmp(env, "EXCLUSIVE_COMPRESS_ARENAS", max_chars) == 0) {
+    return EXCLUSIVE_COMPRESS_ARENAS;
   }
 
   return INVALID_LAYOUT;
@@ -44,6 +115,8 @@ char *layout_str(enum arena_layout layout) {
       return "SHARED_SITE_ARENAS";
     case BIG_SMALL_ARENAS:
       return "BIG_SMALL_ARENAS";
+    case EXCLUSIVE_COMPRESS_ARENAS:
+      return "EXCLUSIVE_COMPRESS_ARENAS";
     default:
       break;
   }
@@ -81,16 +154,17 @@ sicm_device *get_device_from_numa_node(int id) {
 
 /* Gets environment variables and sets up globals */
 void set_options() {
-  char *env, *str, *line, guidance, found_guidance;
+  char *env, *str, *line, guidance, found_guidance,
+       compress_guidance, found_compress_guidance;
   long long tmp_val;
   deviceptr device;
   size_t i, n;
-  int node, cpu, site, num_cpus, num_nodes;
-  FILE *guidance_file;
+  int node, compress, cpu, site, num_cpus, num_nodes;
+  FILE *guidance_file, *compress_guidance_file;
   ssize_t len;
   struct bitmask *cpus, *nodes;
   char flag;
-  
+ 
   profopts.profile_type_flags = 0;
   
   env = getenv("SH_FREE_BUFFER");
@@ -401,6 +475,33 @@ void set_options() {
   }
   if(tracker.log_file) {
     fprintf(tracker.log_file, "SH_MAX_SITES: %d\n", tracker.max_sites);
+  }
+
+
+  if(tracker.layout != INVALID_LAYOUT) {
+    tracker.arenas = (arena_info **) orig_calloc(tracker.max_arenas, sizeof(arena_info *));
+    
+    /* These atomics keep track of per-site information, such as:
+       1. `site_bigs`: boolean for if the site is above big_small_threshold or not.
+       2. `site_sizes`: the number of bytes allocated to this site.
+       3. `site_devices`: a pointer to the device that this site should be bound to.
+       4. `site_arenas`: an integer index of the arena this site gets allocated to.
+       5. `site_compress`: boolean for if this site should be compressed.
+    */
+    tracker.site_bigs = (atomic_char *) orig_calloc(tracker.max_sites, sizeof(atomic_char));
+    tracker.site_sizes = (atomic_size_t *) orig_calloc(tracker.max_sites, sizeof(atomic_size_t));
+    tracker.site_devices = (atomic_intptr_t *) orig_malloc(tracker.max_sites * sizeof(atomic_intptr_t));
+    for(i = 0; i < tracker.max_sites; i++) {
+      tracker.site_devices[i] = (atomic_intptr_t) NULL;
+    }
+    tracker.site_arenas = (atomic_int *) orig_malloc(tracker.max_sites * sizeof(atomic_int));
+    for(i = 0; i < tracker.max_sites; i++) {
+      tracker.site_arenas[i] = -1;
+    }
+    tracker.site_compress = (atomic_int *) orig_malloc(tracker.max_sites * sizeof(atomic_int));
+    for(i = 0; i < tracker.max_sites; i++) {
+      tracker.site_compress[i] = 0;
+    }
   }
 
   /* Controls the profiling rate of all profiling types */
@@ -789,6 +890,33 @@ void set_options() {
     }
   }
 
+  env = getenv("SH_PROFILE_COMPRESS_STATS");
+  if(env) {
+    enable_profile_compress_stats();
+
+    env = getenv("SH_COMPRESS_STATS_FILE");
+    profopts.compress_stats_file = NULL;
+    if (env) {
+      profopts.compress_stats_file = fopen(env, "w");
+      if(!profopts.compress_stats_file) {
+        fprintf(stderr, "Failed to open compress stats file. Aborting.\n");
+        exit(1);
+      }
+    }
+  }
+
+  env = getenv("SH_CGROUP_MEM_HIGH");
+  if(env) {
+    add_self_to_cgroup();
+    cgroup_set_mem_compress();
+    cgroup_set_mem_high((size_t) strtoimax(env, NULL, 10));
+  }
+
+  env = getenv("SH_CGROUP_MEM_MAX");
+  if(env) {
+    cgroup_set_mem_max((size_t) strtoimax(env, NULL, 10));
+  }
+
   /* What sample frequency should we use? Default is 2048. Higher
    * frequencies will fill up the sample pages (below) faster.
    */
@@ -880,6 +1008,9 @@ void set_options() {
     case EXCLUSIVE_ARENAS:
       tracker.arenas_per_thread = 1;
       break;
+    case EXCLUSIVE_COMPRESS_ARENAS:
+      tracker.arenas_per_thread = 2;
+      break;
     case EXCLUSIVE_DEVICE_ARENAS:
       tracker.arenas_per_thread = 2;
       break;
@@ -950,6 +1081,68 @@ void set_options() {
     }
     if(!found_guidance) {
       fprintf(stderr, "Didn't find any guidance in the file. Aborting.\n");
+      exit(1);
+    }
+  }
+
+  /* Get the guidance file that tells where each site goes */
+  env = getenv("SH_COMPRESS_GUIDANCE_FILE");
+  if(env) {
+    /* Open the file */
+    compress_guidance_file = fopen(env, "r");
+    if(!compress_guidance_file) {
+      fprintf(stderr, "Failed to open compress_guidance file. Aborting.\n");
+      exit(1);
+    }
+
+    /* Read in the sites */
+    compress_guidance = 0;
+    found_compress_guidance = 0; /* Set if we find any site compress_guidance at all */
+    line = NULL;
+    len = 0;
+    while(getline(&line, &len, compress_guidance_file) != -1) {
+      str = strtok(line, " ");
+      if(compress_guidance) {
+        if(!str) continue;
+
+        /* Look to see if it's the end */
+        if(str && (strcmp(str, "=====") == 0)) {
+          str = strtok(NULL, " ");
+          if(str && (strcmp(str, "END") == 0)) {
+            compress_guidance = 0;
+          } else {
+            fprintf(stderr, "In a compress_guidance section, and found five equals signs, but not the end. Aborting.\n");
+            exit(1);
+          }
+          continue;
+        }
+
+        /* Read in the actual compress_guidance now that we're in a compress_guidance section */
+        sscanf(str, "%d", &site);
+        str = strtok(NULL, " ");
+        if(!str) {
+          fprintf(stderr, "Read in a site number from the compress_guidance file, but no node number. Aborting.\n");
+          exit(1);
+        }
+        sscanf(str, "%d", &compress);
+
+        tracker.site_compress[site] = ( (compress==0) ? 0 : 1 );
+ 
+      } else {
+        if(!str) continue;
+        /* Find the "===== GUIDANCE" tokens */
+        if(strcmp(str, "=====") != 0) continue;
+        str = strtok(NULL, " ");
+        if(str && (strcmp(str, "GUIDANCE") == 0)) {
+          /* Now we're in a compress_guidance section */
+          compress_guidance = 1;
+          found_compress_guidance = 1;
+          continue;
+        }
+      }
+    }
+    if(!found_compress_guidance) {
+      fprintf(stderr, "Didn't find any compress_guidance in the file. Aborting.\n");
       exit(1);
     }
   }
@@ -1030,24 +1223,6 @@ void sh_init() {
   set_options();
 
   if(tracker.layout != INVALID_LAYOUT) {
-    tracker.arenas = (arena_info **) orig_calloc(tracker.max_arenas, sizeof(arena_info *));
-    
-    /* These atomics keep track of per-site information, such as:
-       1. `site_bigs`: boolean for if the site is above big_small_threshold or not.
-       2. `site_sizes`: the number of bytes allocated to this site.
-       3. `site_devices`: a pointer to the device that this site should be bound to.
-       4. `site_arenas`: an integer index of the arena this site gets allocated to.
-    */
-    tracker.site_bigs = (atomic_char *) orig_calloc(tracker.max_sites, sizeof(atomic_char));
-    tracker.site_sizes = (atomic_size_t *) orig_calloc(tracker.max_sites, sizeof(atomic_size_t));
-    tracker.site_devices = (atomic_intptr_t *) orig_malloc(tracker.max_sites * sizeof(atomic_intptr_t));
-    for(i = 0; i < tracker.max_sites; i++) {
-      tracker.site_devices[i] = (atomic_intptr_t) NULL;
-    }
-    tracker.site_arenas = (atomic_int *) orig_malloc(tracker.max_sites * sizeof(atomic_int));
-    for(i = 0; i < tracker.max_sites; i++) {
-      tracker.site_arenas[i] = -1;
-    }
 
     /* Initialize the extents array.
      */
